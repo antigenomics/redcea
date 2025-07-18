@@ -1,93 +1,248 @@
-# tcrempnet
+# TCRemP: T-Cell Receptor sequence embedding via Prototypes
 
+![Splash](assets/splash.png)
+TCRemP is a package developed to perform T-cell receptor (TCR) sequence embedding. TCR sequences encode antigen
+specificity of T-cells and their repertoire obtained using [AIRR-Seq](https://www.antibodysociety.org/the-airr-community/) family of technologies serves as a blueprint the individual's adaptive immune system.
+In general, it is very challenging to define and measure similarity between TCR sequences that will properly reflect
+closeness in antigen recongition profiles. Defining a proper language model for TCRs is also a hard task due to their
+immense diversity both in terms of primary sequence organization and in terms of their protein structure.
+Our pipeline follows an agnostic approach and vectorizes each TCR based on its similarity to a set of ad hoc chosen
+TCR "probes". Thus we follow a prototype-based approach and utilize commonly encountered TCRs either sampled from a
+probabilistic V(D)J rearrangement model (see Murugan et al. 2012) or a pool of real-world TCR repertoires to construct a
+coordinate system for TCR embedding.
 
+The workflow is the following:
 
-## Getting started
+* TCRemP pipeline starts with a selection of ``k`` prototype TCR alpha and beta sequences, then it computes the
+  distances from every of ``n`` input TCR alpha-beta pairs to ``2 * k`` prototypes for V, J and CDR3 regions, resulting
+  in ``6 * k`` parameters (or ``3 * k`` for cases when only one of the chains is present).
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+> Distances are computed using local alignment with BLOSUM matrix, as implemented in
+> our [mirpy](https://github.com/antigenomics/mirpy) package; we plan to move all computationally-intensive code there.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+* Resulting distances are treated as embedding co-ordinates and and are subject to principal component analysis (PCA).
+  One can monitor the information conveyed by each PC, whether they are related to features such as Variable or Joining
+  genes, CDR3 region length or a certain epitope.
 
-## Add your files
+> N.B. TCRemP is currently in active development, please see below for the list of features, current documentation, a
+> proof-of-concept example. All encountered bugs can be submitted to the ``issues`` section of the @antigenomics
+> repository.
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+Using TCRemP one can:
 
+- perform an embedding for a set of T-cell clonotypes, defined by TCR’s Variable (V) and Joining (J) gene IDs and
+  complementarity determining region 3 (CDR3, amino acid sequence placed at the V-J junction). The embedding is
+  performed by mapping those features to real vectors using similarities to a set of **prototype** TCR sequences
+- embed a set of clones, pairs of TCR alpha and beta chain clonotypes
+- analyze the mapping by performing dimensionality reduction and evaluating principal components (PCs)
+- cluster the embeddings using [DBSCAN](https://scikit-learn.org/stable/modules/generated/sklearn.cluster.DBSCAN.html)
+  method with parameter selection using knee/elbow method
+- visualize T-cell clone and clonotype embeddings using tSNE, coloring the visualization by user-specified clonotype
+  labels, such as antigen specificities
+- infer cluster that are significantly enriched in certain labels, e.g. TCR motifs belonging to CD8+ T-cell subset or
+  specific to an antigen of interest
+
+Planned features:
+
+- [in progress] co-embed samples with  [VDJdb database](https://github.com/antigenomics/vdjdb-db) to predict TCRs
+  associated with certain antigens, i.e. “annotate” TCR repertoires
+- [in progress] perform imputation to correctly handle mixed single-/paired-chain data
+- [in progress] implement B-cell receptor (BCR/antibody) prototypes to apply the method to antibody sequencing data
+
+## Citing
+
+Please cite the tool using the paper: 
+
+`Yulia Kremlyakova, Elizaveta Vlasova, Daniil Luppov, Mikhail Shugay, TCREMP: a bioinformatic pipeline for efficient embedding of T-cell receptor sequences from immune repertoire and single-cell sequencing data, Journal of Molecular Biology, 2025`
+
+(https://doi.org/10.1016/j.jmb.2025.169205)
+
+# Getting started
+
+## Installation procedure and first run
+
+One can simply install the software out-of-the-box using [pip](https://pypi.org/project/pip/) with py3.11:
+
+```{bash}
+conda create -n tcremp ipython python=3.11
+conda activate tcremp
+pip install git+https://github.com/antigenomics/tcremp@0.0.1-publication
 ```
-cd existing_repo
-git remote add origin https://gitlab.aldan3.itm-rsmu.ru/isagroup/tcrempnet.git
-git branch -M main
-git push -uf origin main
+
+> `0.0.1-publication` tag corresponds to the version used in the publication *TCREMP, JMB, 2025*.  
+>
+> For the latest version install via the following command: `pip install git+https://github.com/antigenomics/tcremp`
+
+Or, in case of package version problems or other issues, clone the repository manually via git, create
+corresponding [conda](https://docs.conda.io/en/latest/) environment and install directly from sources:
+
+```{bash}
+git clone https://github.com/antigenomics/tcremp.git
+cd tcremp
+conda create -n tcremp ipython python=3.11
+conda activate tcremp
+pip install .
 ```
 
-## Integrate with your tools
+If the installation doesn't work for Apple M1-M3 processors install the required libraries yourself.
 
-- [ ] [Set up project integrations](https://gitlab.aldan3.itm-rsmu.ru/isagroup/tcrempnet/-/settings/integrations)
+Check the installation by running:
 
-## Collaborate with your team
+```{bash}
+tcremp-run -h # note that first run may be slow
+cd $tcremp_repo # where $tcremp_repo is the path to cloned repository
+tcremp-run -i data/example/v_tcrpmhc.txt -c TRA_TRB -o data/example/ -n 10 -x clone_id
+```
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+check that there were no errors and observe the results stored in ``data/example`` folder. You can then go through
+the ``example.ipynb`` notebook to run the analysis and visualize the results. You can proceed with your own datasets by
+substituting example data with your own properly formatted clonotype tables.
 
-## Test and Deploy
+## Preparing the input data
 
-Use the built-in continuous integration in GitLab.
+The input data typically consists of a table containing clonotypes as defined above, either TCR alpha, or beta, or both.
+One can additionally tag clonotypes/clones with user-defined ids, e.g. cell barcodes, and labels, e.g. antigen
+specificity or phenotype. One can also use a custom clonotype table instead of a pre-built set of prototypes (
+see ``data/example/VDJdb_data_paired_example.csv``).
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+### Input format
 
-***
+#### Common requirements
 
-# Editing this README
+1. V and J gene names should be provided based on [IMGT](https://www.imgt.org/) naming, e.g. ``TRAV35*03``
+   or ``TRBV11-2``. TCRemP will always use the major allele, so the alleles above will be transformed
+   into ``TRBV11-2*01``
+2. The data should not contain any missing data for any of the columns: V, J and CDR3.
+3. There should be no symbols except for 20 amino acids in CDR3s
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+#### Input columns
 
-## Suggestions for a good README
+| Column name | Description                                                                                                    | Required                               |
+|-------------|----------------------------------------------------------------------------------------------------------------|----------------------------------------|
+| clone_id    | clonotype id which will be transferred to the output file and which will be used for paired chain data mapping | optional (required for `TRA_TRB` mode) |
+| v_call      | TCR V gene ID                                                                                                  | required                               |
+| j_call      | TCR  J gene ID                                                                                                 | required                               |
+| junction_aa | TCR CDR3 amino acid sequence                                                                                   | required                               |
+| locus       | either `alpha` or `beta`                                                                                       | required                               |
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+#### Single chain table example
 
-## Name
-Choose a self-explaining name for your project.
+Either wide with missing values
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+| clone_id |   junction_aa   |  v_call  | j_call  | locus |
+|:--------:|:---------------:|:--------:|:-------:|:-----:|
+|    1     |  CASSIRSSYEQYF  | TRBV19	  | TRBJ2-7 | beta  |
+|    2     | CASSWGGGSHYGYTF | TRBV11-2 | TRBJ1-2 | beta  |
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+#### Paired chain example
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+A simple flat format
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+|      clone_id       |   junction_aa   |  v_call  | j_call  | locus |
+|:-------------------:|:---------------:|:--------:|:-------:|:-----:|
+| GACTGCGCATCGTCGG-28 |   CAGHTGNQFYF   | TRAV35	  | TRAJ49  | alpha |
+| GACTGCGCATCGTCGG-28 | CASSWGGGSHYGYTF | TRBV11-2 | TRBJ1-2 | beta  |
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## Running TCRemP
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### Basic usage of TCREmP
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+Run the tool as
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```{bash}
+tcremp-run --input my_input_data.txt --output my_folder --chain TRA_TRB
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+The command above will:
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+- checks input data format and proofreads the dataset
+- extracts TCR alpha and beta clonotypes from ``my_input_data.txt``
+- calculates distance scores from clonotypes for the built-in set of ``3000`` prototypes for each chain
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+[//]: # "- performs **PCA** and saves transformed data"
 
-## License
-For open source projects, say how it is licensed.
+[//]: # "- runs **DBSCAN** clustering with parameters ``min_samples = 2``, ``eps`` value inferred by knee method, and saves"
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+[//]: # "  resulting clusters"
+
+[//]: # "  All input will be saved in ``my_folder/``"
+
+### Command line parameters
+
+The parameters for running ``tcremp-run`` main script are the following:
+
+| parameter                  | short usage      | description                                                  | available values                        | required | default value              |
+| -------------------------- | ---------------- | ------------------------------------------------------------ | --------------------------------------- | -------- | -------------------------- |
+| --input                    | -i               | input clonotype table                                        | path to file                            | yes      | -                          |
+| --output                   | -o               | pipeline output folder                                       | path to directory                       | no       | tcremp_{inputfilename}/    |
+| --prefix                   | -e               | prefix name for distance file                                | str                                     | no       | tcremp_{inputfilename}/    |
+| --index-col                | -x               | index column where the clonotype IDs are stored              | str                                     | no       | tcremp_{inputfilename}/    |
+| --chain                    | -c               | single or paired clonotype chains                            | TRA, TRB, TRA_TRB                       | yes      | -                          |
+| --prototypes_path          | -p               | path to the custom input prototype table                     | path to file                            | no       | data/example/v_tcrpmhc.txt |
+| --n-prototypes             | -n               | number of prototypes to be selected for embedding supplemented prototype table | integer                                 | no       | None                       |
+| --sample-random-prototypes | -sample-random-p | whether to sample the prototypes randomly or not             | bool                                    | no       | False                      |
+| --n-clonotypes             | -nc              | number of clonotypes to be selected from input file          | integer                                 | no       | None                       |
+| --sample-random-clonotypes | -sample-random-c | whether to sample the clonotypes randomly or not             | bool                                    | no       | False                      |
+| --species                  | -s               | species of built-in prototypes to be used                    | HomoSapiens, MusMusculus, MacacaMulatta | no       | HomoSapiens                |
+| --random-seed              | -r               | random seed for random prototype selection                   | integer                                 | no       | None                       |
+| --nproc                    | -np              | number of processes to perform calculcation with             | integer                                 | no       | 1                          |
+| --lower-len-cdr3           | -llen            | filter out cdr3 with len <llen                               | integer                                 | no       | 30                         |
+| --higher-len-cdr3          | -hlen            | filter out cdr3 with len >hlen                               | integer                                 | no       | 30                         |
+| --metrics                  | -m               | which type of matrics to use: similarity or dissimilarity one | similarity, dissimilarity               | no       | dissimilarity              |
+| --save-dists               | -d               | whether to save the file with evaluated TCRemP distances or not | bool                                    | no       | True                       |
+| --cluster                  | -cl              | whether to perform the clustering or not                     | bool                                    | no       | True                       |
+| --cluster-pc-components    | -npc             | number of PCA components for distances dimension reduction   | integer                                 | no       | 50                         |
+| --cluster-min-samples      | -ms              | min_samples parameter for DBSCAN used in clonotype clustering | integer                                 | no       | 3                          |
+| --k-neightbors             | -kn              | k-th neighbor parameter for Knee estimation                  | integer                                 | no       | 4                          |
+
+### Separate TCREmP-cluster launch
+
+If you have a file with TCREmP distances calculated you can separately run the clustering step to adjust it to your data. Run the tool as
+
+```{bash}
+tcremp-cluster --input tcremp_distances.tsv --output tcremp_clusters.tsv --components 50 --min_samples 3 --kth_neighbor 4
+```
+
+### Output
+
+The output TCRemP file will contain the following **columns**:
+
+- clone_id - assigned identifier to each row of the input table (either transferred from initial data or generated)
+- cdr3aa_*{alpha/beta}* - cdr3aa sequences for alpha/beta chain
+- v_*{alpha/beta}* - v gene for alpha/beta chain
+- j_*{alpha/beta}* - j gene for alpha/beta chain
+- *{i}*\_a_v, *{i}*\_a\_j, *{i}*_a_cdr3 - columns with distances to each alpha prototype
+- *{i}*\_b_v, *{i}*\_b_j, *{i}*_b_cdr3 - columns with distances to each beta prototype
+
+Each line of the output file corresponds to one input clonotype.
+
+Clustering output file will contain the following **columns**:
+
+- clone_id - assigned identifier to each row of the input table (either transferred from initial data or generated)
+- cdr3aa_{alpha/beta} - cdr3aa sequences for alpha/beta chain
+- cluster - id of cluster, -1 if a clonotype is an outlier
+
+## Usage examples
+
+### VDJdb example
+
+Basic example of TCRemP usage is running it for VDJdb subsets. The input data for this example can be found in `data/example`. The derived embeddings were further visualized using PCA into 50 components and TSNE. The clonotypes are colored by the epitope. 
+
+![vdjdb](appendix/vdjdb_example.png)
+
+### Yellow Fever Vaccination example 
+
+Another example we introduce is the yellow fever vaccination clusters analysis. We merged the day 0 and day 15 datasets and ran TCRemP for the merged set of clonotypes. The clonotypes were further clustered and the enrichment score of each cluster on day 15 was calculated. For more details refer to the initial manuscript.
+
+Various parameters of k - rank of nearest neighbor for DBScan epsilon estimation. The results show that k=4 is the optimal parameter.
+
+![kth_neighbor](appendix/yfv_S1/tcremp_combined_panel_final.png)
+
+ 
+
+### 10X data example
+
+We also performed an analysis of the embeddings derived from patient 10X data. For more information on this example refer to the manuscript Figure 2.
+
+![10x](appendix/10x_proc/10x.png)
+
