@@ -6,11 +6,11 @@ build-backend = "hatchling.build"
 name = "tcremp"
 version = "0.0.1"
 authors = [
-  { name="yuliajk", email="yulia.mow@gmail.com" },
   { name="vek239", email="elizaveta.k.vlasova@gmail.com" },
+  { name="yuliajk", email="yulia.mow@gmail.com" },
   { name="mikessh", email="mikhail.shugay@gmail.com" },
 ]
-description = "A library prototype-based T-cell receptor (TCR) sequence embedding"
+description = "A computational method for fuzzy search of disease associated TCR clusters"
 readme = "README.md"
 license = {file = "LICENSE"}
 classifiers = [
@@ -21,17 +21,14 @@ classifiers = [
 keywords = [ "antigen", "antibody", "t-cell", "receptor", "sequence", "embedding"]
 requires-python = ">=3.11"
 dependencies = [
-        "mir@git+https://github.com/antigenomics/mirpy.git@0.0.5-tcremp-integration",
+        "mir@git+https://github.com/antigenomics/mirpy.git@0.1.0-mirpy-tcrempnet",
         "kneed"
 ]
-
-[project.urls]
-Homepage = "https://github.com/antigenomics/tcremp"
-Issues = "https://github.com/antigenomics/tcremp/issues"
 
 [project.scripts]
 tcremp-run = "tcremp.tcremp_run:main"
 tcremp-cluster = "tcremp.tcremp_cluster:main"
+tcrempnet = "tcremp.tcrempnet:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true 
