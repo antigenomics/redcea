@@ -40,7 +40,7 @@ Example SLURM script:
 #!/bin/sh
 #SBATCH --job-name=tcremp_as_Mikh
 #SBATCH --cpus-per-task=48
-#SBATCH --mem=16gb
+#SBATCH --mem=64gb
 #SBATCH --time=08:00:00
 #SBATCH --output=tcremp_as_Mikh.%j.log
 #SBATCH --mail-type=ALL
@@ -48,14 +48,14 @@ Example SLURM script:
 #SBATCH --constraint=hpc
 #SBATCH --partition=medium
 
-python tcremp_run.py \
+tcremp_run \
   --input /projects/immunestatus/pogorelyy/airr_format/P1_0_F1_with_1.txt \
   --output /projects/immunestatus/test \
   --chain TRB \
   -np 48
 ```
 
-> ⚠️ Time estimate: embedding step is computationally intensive. For large samples (\~100,000 clonotypes), runtime may exceed 6 hours even on 100 CPU threads.
+> ⚠️ Time estimate: embedding step is computationally intensive. For large samples (\~100,000 clonotypes), runtime may exceed 6 hours even on 48 CPU threads requiring upto 256GB RAM.
 
 #### Step 2: Run `tcrEmpNet.py` on saved embeddings
 
@@ -177,4 +177,4 @@ The output consists of:
 
 For more details, see the original publication:
 
-> Vlasova et al., TCRemPNet: motif-based clustering of immune repertoires, 2025 (in prep.)
+> Vlasova et al., TCRemPNet: vector-based clustering of immune repertoires with enrichment test, 2025 (in prep.)
