@@ -1,12 +1,12 @@
-# TCRemPNet: T-cell repertoire clustering and enrichment
+`tcremp-cluster` | Clusters existing embeddings via PCA + DBSCAN      | | `tcrempnet`      | Performs embedding, clustering, and enrichment     |# TCRemPNet: T-cell repertoire clustering and enrichment
 
 TCRemPNet is a pipeline for comparing immune repertoires using prototype-based TCR embeddings. It is based on the original TCRemP embedding method, but supports comparison between case/control samples (e.g., vaccinated vs baseline) and clustering clonotypes using distances in embedding space.
 
-This repository contains the tools for:
+This repository contains command-line tools for:
 
-* Computing prototype-based embeddings for a case and background repertoire.
-* Performing clustering using PCA + DBSCAN.
-* Comparing cluster enrichment across conditions.
+* Computing prototype-based embeddings for a case and background repertoire (`tcremp-run`)
+* Performing clustering using PCA + DBSCAN (`tcremp-cluster`)
+* Comparing cluster enrichment across conditions (`tcrempnet`)
 
 ---
 
@@ -15,7 +15,7 @@ This repository contains the tools for:
 ```bash
 git clone https://gitlab.aldan3.itm-rsmu.ru/isagroup/tcrempnet.git
 cd tcrempnet
-conda env create -n tcrempnet python=3.12
+conda env create -n tcrempnet python=3.11
 conda activate tcrempnet
 pip install -e .
 ```
@@ -26,155 +26,127 @@ Ensure the `mirpy` library is installed and importable.
 
 ## 🚀 Running TCRemPNet
 
-### Option 1: Two-step execution
+### Option 1: Two-step execution (embedding + enrichment separately)
 
-You can first compute TCRemP embeddings for each sample separately using `tcremp_run.py` (from the original `tcremp` repository), and then pass the `.parquet` files to TCRemPNet.
+💡 **Tip:** If you're planning to use the same background repertoire for multiple case samples (e.g., comparing several patient samples against a shared healthy baseline), it's highly recommended to compute and save background embeddings once using `tcremp-run`, and reuse them in all downstream `tcrempnet` runs. This significantly reduces runtime and avoids redundant computations.
 
-#### Step 1: Compute embeddings
-
-Example SLURM script:
-
-`squeue_tcremp_as_large.sh`
+#### Step 1: Compute embeddings for each sample using `tcremp-run`
 
 ```bash
-#!/bin/sh
-#SBATCH --job-name=tcremp_as_Mikh
-#SBATCH --cpus-per-task=48
-#SBATCH --mem=64gb
-#SBATCH --time=08:00:00
-#SBATCH --output=tcremp_as_Mikh.%j.log
-#SBATCH --mail-type=ALL
-#SBATCH --mail-user=elizaveta.k.vlasova@gmail.com
-#SBATCH --constraint=hpc
-#SBATCH --partition=medium
-
-tcremp_run \
-  --input /projects/immunestatus/pogorelyy/airr_format/P1_0_F1_with_1.txt \
-  --output /projects/immunestatus/test \
-  --chain TRB \
-  -np 48
+tcremp-run \
+  --input /projects/immunestatus/airr_format/sample.tsv \
+  --output ./results --chain TRB -np 48
 ```
 
-> ⚠️ Time estimate: embedding step is computationally intensive. For large samples (\~100,000 clonotypes), runtime may exceed 6 hours even on 48 CPU threads requiring upto 256GB RAM.
+This produces:
 
-#### Step 2: Run `tcrEmpNet.py` on saved embeddings
+* `results/sample_tcremp.parquet` — embedding table with prototype distances (in `.parquet` format)
+* `results/sample_tcremp_clusters.tsv` — clustering results (optional if `--cluster` was used)
+
+⚠️ Embedding is resource-intensive. For large samples (100,000+ clonotypes), allow up to 8 hours on 48 CPUs.
+
+#### Step 2: Run `tcrempnet` on saved embeddings
 
 ```bash
-python tcrEmpNet.py \
-  -is sample.tsv \
-  -ib background.tsv \
-  -c TRB \
-  -o results/ \
-  -se sample_emb.parquet \
-  -be background_emb.parquet \
-  -np 8
+tcrempnet \
+  -is /projects/immunestatus/airr_format/sample.tsv \
+  -ib /projects/immunestatus/airr_format/background.tsv \
+  -c TRB -o ./results -np 4
+  -se ./results/sample_tcremp.parquet \
+  -be ./results/background_tcremp.parquet
 ```
 
 > ✅ This step is fast: clustering + enrichment takes \~10 minutes per sample pair.
 
-Alternatively, use SLURM:
-
-```bash
-sbatch squeue_tcrempnet_as.sh
-```
-
 ---
 
-### Option 2: Full run with embedding and clustering
+### Option 2: End-to-end pipeline
 
 ```bash
-python tcrEmpNet.py \
+tcrempnet \
   -is sample.tsv \
   -ib background.tsv \
   -c TRB \
-  -o results/ \
+  -o ./results \
   -np 8
 ```
+
+Embeddings for both case/control are computed internally.
+
+---
+
+## 📤 CLI Tools
+
+| CLI Tool         | Description                                        |
+| ---------------- | -------------------------------------------------- |
+| `tcremp-run`     | Computes TCRemP embeddings and optional clustering |
+| `tcrempnet`      | Performs embedding, clustering, and enrichment     |
+| `tcremp-cluster` | Clusters existing embeddings via PCA + DBSCAN      |
 
 ---
 
 ## 🧪 Example: Yellow Fever Dataset
 
 ```bash
-python tcrEmpNet.py \
-  -is /projects/immunestatus/yfv/yfv_day15.tsv \
-  -ib /projects/immunestatus/yfv/yfv_day0.tsv \
-  -c TRB \
-  -o /projects/immunestatus/yfv/tcrempnet \
-  -se /projects/immunestatus/yfv/embeddings_day15.parquet \
-  -be /projects/immunestatus/yfv/embeddings_day0.parquet \
-  -np 8
+tcrempnet \
+  --sample /projects/immunestatus/pogorelyy/airr_format/yfv_day_15.txt \
+  --background /projects/immunestatus/pogorelyy/airr_format/yfv_day_0.txt \
+  --output /projects/immunestatus/pogorelyy/tcrempnet/yfv_res \
+  --chain TRB \
+  --prefix yfv_result \
+  -np 16
 ```
 
 ---
 
-## 📎 SLURM job script example
+## 📥 Output files
 
-`squeue_tcrempnet_as.sh`
+Depending on the mode, the pipeline outputs:
+
+| File Name                          | Description                                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------------------------- |
+| `*_tcremp.parquet`                 | Embedding table with distances to all prototypes and clonotype metadata (in parquet format) |
+| `*_tcremp_clusters.tsv`            | Clustering results per clonotype: `clone_id`, `cluster_id`, `cdr3aa`, `v`, `j`              |
+| `*_summary_tcrempnet.tsv`          | Summary statistics for each cluster: size, enrichment p-value, FDR, case/control presence   |
+| `*_enriched_clonotypes_tcremp.tsv` | Clonotypes from enriched clusters (FDR < 0.05), useful for downstream biological analysis   |
+| `*.log`                            | Run log for debugging and runtime tracking                                                  |
+
+> If `--cluster` is disabled, only embeddings are saved.
+
+---
+
+## 📎 SLURM job example
+
+### Full pipeline
 
 ```bash
 #!/bin/sh
 #SBATCH --job-name=tcrempnet
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=1024gb
-#SBATCH --time=24:00:00
-#SBATCH --output=tcrempnet_as.%j.log
-#SBATCH --mail-type=ALL
-#SBATCH --mail-user=elizaveta.k.vlasova@gmail.com
-#SBATCH --constraint=hpc
-#SBATCH --partition=long
+#SBATCH --cpus-per-task=48
+#SBATCH --mem=128gb
+#SBATCH --time=08:00:00
+#SBATCH --output=tcrempnet_run.%j.log
 
-python tcrEmpNet.py \
-  -is /projects/immunestatus/rheum/airr_format/joint_as.tsv \
-  -ib /projects/immunestatus/rheum/airr_format/joint_hd.tsv \
-  -c TRB -o /projects/immunestatus/rheum/tcrempnet -np 4 \
-  -se /projects/immunestatus/rheum/tcremp/joint_as_embeddings.parquet \
-  -be /projects/immunestatus/rheum/tcremp/joint_hd_embeddings.parquet
+tcrempnet \
+  -is case.tsv \
+  -ib control.tsv \
+  -c TRB \
+  -o ./results \
+  -np 48
+```
+
+### Embedding only
+
+```bash
+tcremp-run \
+  --input case.tsv \
+  --output ./results \
+  --chain TRB \
+  -np 32
 ```
 
 ---
 
-## 📥 Arguments for `tcrEmpNet.py`
-
-| Argument                                         | Description                              | Required | Default                   |
-| ------------------------------------------------ | ---------------------------------------- | -------- | ------------------------- |
-| `-is`, `--sample`                                | Sample clonotype file (case)             | ✅        | —                         |
-| `-ib`, `--background`                            | Background clonotype file (control)      | ✅        | —                         |
-| `-o`, `--output`                                 | Output folder path                       | ✅        | —                         |
-| `-e`, `--prefix`                                 | Output filename prefix                   | ❌        | From sample name          |
-| `-x`, `--index-col`                              | Optional column name to keep clone IDs   | ❌        | —                         |
-| `-c`, `--chain`                                  | Chain type                               | ✅        | — (TRA, TRB, or TRA\_TRB) |
-| `-p`, `--prototypes-path`                        | Custom prototype file path               | ❌        | Prebuilt                  |
-| `-n`, `--n-prototypes`                           | Number of prototypes                     | ❌        | All                       |
-| `-sample_random_p`, `--sample-random-prototypes` | Sample prototypes randomly               | ❌        | False                     |
-| `-nc`, `--n-clonotypes`                          | Limit number of clonotypes               | ❌        | All                       |
-| `-sample_random_c`, `--sample-random-clonotypes` | Sample clonotypes randomly               | ❌        | False                     |
-| `-s`, `--species`                                | Species (for aligner)                    | ❌        | HomoSapiens               |
-| `-u`, `--unique-clonotypes`                      | Use unique clonotypes only               | ❌        | —                         |
-| `-r`, `--random-seed`                            | Random seed                              | ❌        | 42                        |
-| `-np`, `--nproc`                                 | Number of threads                        | ❌        | 1                         |
-| `-llen`, `--lower-len-cdr3`                      | Min CDR3 length                          | ❌        | 5                         |
-| `-hlen`, `--higher-len-cdr3`                     | Max CDR3 length                          | ❌        | 30                        |
-| `-m`, `--metrics`                                | Similarity or dissimilarity              | ❌        | dissimilarity             |
-| `-d`, `--save-dists`                             | Save distances table                     | ❌        | True                      |
-| `-cl`, `--cluster`                               | Run clustering step                      | ❌        | True                      |
-| `-npc`, `--cluster-pc-components`                | PCA components                           | ❌        | 50                        |
-| `-ms`, `--cluster-min-samples`                   | DBSCAN min\_samples                      | ❌        | 3                         |
-| `-kn`, `--k-neighbors`                           | k-th neighbor for KneeLocator            | ❌        | 4                         |
-| `-se`, `--sample-embedding`                      | Path to precomputed sample embedding     | ❌        | None                      |
-| `-be`, `--background-embedding`                  | Path to precomputed background embedding | ❌        | None                      |
-
----
-
-## 📊 Output files
-
-The output consists of:
-
-* `.tsv` table of prototype distances (if `--save-dists`)
-* `.tsv` table with clustering results: `clone_id`, chain features, `cluster_id`
-
----
-
-For more details, see the original publication:
+## 📘 Reference
 
 > Vlasova et al., TCRemPNet: vector-based clustering of immune repertoires with enrichment test, 2025 (in prep.)
