@@ -1,4 +1,4 @@
-`tcremp-cluster` | Clusters existing embeddings via PCA + DBSCAN      | | `tcrempnet`      | Performs embedding, clustering, and enrichment     |# TCRemPNet: T-cell repertoire clustering and enrichment
+# TCRemPNet: T-cell repertoire clustering and enrichment
 
 TCRemPNet is a pipeline for comparing immune repertoires using prototype-based TCR embeddings. It is based on the original TCRemP embedding method, but supports comparison between case/control samples (e.g., vaccinated vs baseline) and clustering clonotypes using distances in embedding space.
 
