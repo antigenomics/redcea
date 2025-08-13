@@ -117,6 +117,9 @@ Depending on the mode, the pipeline outputs:
 
 ## 📎 SLURM job example
 
+> Make sure you have activated the `tcrempnet` environment **before** submitting slurm jobs.
+
+
 ### Full pipeline
 
 ```bash
