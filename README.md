@@ -150,6 +150,41 @@ tcremp-run \
 
 ---
 
+## ⚙️ Arguments
+
+| Short | Long | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `-is` | `--sample` | Yes | — | Path to input file containing a clonotype (clone) table of the sample repertoire. |
+| `-ib` | `--background` | Yes | — | Path to input file containing a clonotype (clone) table of the background repertoire. |
+| `-o` | `--output` | Yes | — | Path to the output folder. |
+| `-e` | `--prefix` | No | input filename | Output prefix. Defaults to the input clonotype table filename. |
+| `-x` | `--index-col` | No | — | Optional: column in the input table containing user-defined IDs to be transferred to outputs. |
+| `-c` | `--chain` | Yes | — | Chain type: `TRA` or `TRB` for single-chain clonotypes, or `TRA_TRB` for paired-chain clones. |
+| `-p` | `--prototypes-path` | No | prebuilt set | Path to user-specified prototypes file. If not set, prebuilt prototypes from `$tcremp_path/data/data_prebuilt` are used. |
+| `-n` | `--n-prototypes` | No | all available | Number of prototypes to use for embedding. Coordinates = (chains) × (V,J,CDR3 distances) × (n). |
+| — | `--sample-random-prototypes` | No | `False` | Whether to sample prototypes randomly. |
+| `-nc` | `--n-clonotypes` | No | all available | Number of clonotypes to process. |
+| — | `--sample-random-clonotypes` | No | `False` | Whether to sample clonotypes randomly. |
+| `-s` | `--species` | No | `HomoSapiens` | Species for V/J gene alignment. Options: `HomoSapiens`, `MusMusculus`, `MacacaMulatta`. |
+| `-u` | `--unique-clonotypes` | No | — | Run only on unique clonotypes/clones to speed up analysis. |
+| `-r` | `--random-seed` | No | `42` | Random seed for prototype sampling and other RNG-based steps. |
+| `-np` | `--nproc` | No | `1` | Number of parallel processes. |
+| `-llen` | `--lower-len-cdr3` | No | `5` | Minimum CDR3 length to keep. Shorter ones are filtered. |
+| `-hlen` | `--higher-len-cdr3` | No | `30` | Maximum CDR3 length to keep. Longer ones are filtered. |
+| `-m` | `--metrics` | No | `dissimilarity` | Whether to calculate similarity or dissimilarity scores with TCRemP. |
+| — | `--sample-embeddings` | No | — | Path to precomputed sample embeddings (`.parquet`). |
+| — | `--background-embeddings` | No | — | Path to precomputed background embeddings (`.parquet`). |
+| `-d` | `--save-dists` | No | `True` | Whether to save TCRemP distances. |
+| `-cl` | `--cluster` | No | `True` | Whether to perform clustering. |
+| `-npc` | `--cluster-pc-components` | No | `50` | Number of PCA components before clustering. |
+| `-ms` | `--cluster-min-samples` | No | `3` | `min_samples` parameter for DBSCAN. |
+| `-kn` | `--k-neighbors` | No | `4` | k-th neighbor parameter for Knee eps estimation. |
+| `-se` | `--sample-embedding` | No | — | Path to a sample embedding file (`.parquet`). Computed if not provided. |
+| `-be` | `--background-embedding` | No | — | Path to a background embedding file (`.parquet`). Computed if not provided. |
+| — | `--cluster-algo` | No | `dbscan` | Clustering algorithm to use: `dbscan` or `hdbscan`. |
+
+---
+
 ## 📘 Reference
 
 > Vlasova et al., TCRemPNet: vector-based clustering of immune repertoires with enrichment test, 2025 (in prep.)
