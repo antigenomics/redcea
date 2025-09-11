@@ -156,11 +156,14 @@ def main():
     # eps = (eps_sample * sample_size + eps_background * background_size) / (sample_size + background_size)
     # logging.info(f'Weighted epsilon is {eps}')
 
-    logging.info("Starting clustering...")
-    clust = run_dbscan_clustering(df,
-                                  eps=eps,
-                                  closest_neigh_dist_array=distances[:, 1],
-                                  min_samples=args.cluster_min_samples)
+    logging.info(f"Starting clustering with algo='{args.cluster_algo}' ...")
+    clust = run_dbscan_clustering(
+        df,
+        eps=eps,
+        closest_neigh_dist_array=distances[:, 1],
+        min_samples=args.cluster_min_samples,
+        algo=args.cluster_algo,       
+)
     log_memory_usage("After clustering")
 
     cluster_df = pd.DataFrame({'clone_id': joint_ids, 'cluster_id': clust})
@@ -190,8 +193,8 @@ def main():
     joint_embeddings['clone_id'] = joint_ids
     enriched_embeddings = enriched_clonotypes[
         ['clone_id', 'cluster_id', 'source', 'enrichment_pvalue_zbinom']].merge(joint_embeddings)
-    enriched_embeddings.to_csv(
-        f"{output_path}/{prefix}_enriched_embeddings_tcremp.tsv", sep='\t', index=False
+    enriched_embeddings.to_parquet(
+        f"{output_path}/{prefix}_enriched_embeddings_tcremp.parquet"
     )
     logging.info("Saved enriched embeddings.")
 

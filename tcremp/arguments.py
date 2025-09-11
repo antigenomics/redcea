@@ -173,5 +173,9 @@ def get_arguments_enrich():
     parser.add_argument('-be', '--background-embedding', type=str,
                         help='Optional path to background embedding file (parquet). If not set, will be computed or '
                              'default name used.')
+    
+    parser.add_argument("--cluster-algo", choices=["dbscan", "hdbscan"], default="dbscan",
+    help="Clustering algorithm to use (default: dbscan)."
+)
 
     return parser.parse_args()

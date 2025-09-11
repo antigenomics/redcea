@@ -9,7 +9,7 @@ import time
 import argparse
 import logging
 from sklearn.decomposition import PCA, IncrementalPCA
-from sklearn.cluster import DBSCAN
+from sklearn.cluster import DBSCAN, HDBSCAN
 from kneed import KneeLocator
 from tcremp.utils import log_memory_usage
 import faiss
@@ -85,20 +85,35 @@ def estimate_dbscan_eps(data, distances, poly_degree=10):
     return eps
 
 
-def cluster_dbscan_with_filter(data, eps, min_samples, d1):
+def cluster_dbscan_with_filter(data, eps, min_samples, d1, algo="dbscan"):
+    """
+    Фильтр d1<=eps сохраняем, а выбор алгоритма делаем только при fit_predict:
+    - dbscan: DBSCAN(eps=..., min_samples=...)
+    - hdbscan: HDBSCAN() (без наших дефолтов)
+    """
     try:
         data = data.to_numpy()
     except Exception:
         pass
+
     n_total = data.shape[0]
     start = time.time()
+
     mask = d1 <= eps
     n_filtered_out = np.sum(~mask)
     logging.info(
-        f"Filtered out {n_filtered_out} points out of {n_total} ({n_filtered_out / n_total:.2%}) due to large d1 > eps")
+        f"Filtered out {n_filtered_out} points out of {n_total} ({n_filtered_out / n_total:.2%}) due to large d1 > eps"
+    )
     filtered_data = data[mask]
-    db = DBSCAN(eps=eps, min_samples=min_samples)
-    filtered_labels = db.fit_predict(filtered_data)
+
+    if algo == "dbscan":
+        model_name = "DBSCAN"
+        model = DBSCAN(eps=eps, min_samples=min_samples)
+    else:
+        model_name = "HDBSCAN"
+        model = HDBSCAN()
+
+    filtered_labels = model.fit_predict(filtered_data)
 
     labels = np.full(data.shape[0], -1, dtype=int)
     labels[mask] = filtered_labels
@@ -107,7 +122,8 @@ def cluster_dbscan_with_filter(data, eps, min_samples, d1):
     n_clusters = len(set(filtered_labels)) - (1 if -1 in filtered_labels else 0)
     n_noise = list(labels).count(-1)
     logging.info(
-        f"Filtered DBSCAN completed: clusters = {n_clusters}, noise points = {n_noise}, time: {elapsed:.2f} sec.")
+        f"Filtered {model_name} completed: clusters = {n_clusters}, noise points = {n_noise}, time: {elapsed:.2f} sec."
+    )
     return labels
 
 
@@ -120,9 +136,11 @@ def prepare_data_for_clustering(df: pd.DataFrame, n_components):
     return df
 
 
-def run_dbscan_clustering(df: pd.DataFrame, eps, closest_neigh_dist_array, min_samples: int = 5):
-    labels = cluster_dbscan_with_filter(df, eps=eps, min_samples=min_samples, d1=closest_neigh_dist_array)
-    log_memory_usage('after dbscan')
+def run_dbscan_clustering(df: pd.DataFrame, eps, closest_neigh_dist_array, min_samples: int = 5, algo: str = "dbscan"):
+    labels = cluster_dbscan_with_filter(
+        df, eps=eps, min_samples=min_samples, d1=closest_neigh_dist_array, algo=algo
+    )
+    log_memory_usage(f'after {algo}')
     return labels
 
 
@@ -131,35 +149,42 @@ def main():
         format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
     )
 
-    parser = argparse.ArgumentParser(description="Run clustering using PCA + DBSCAN")
-    parser.add_argument("--input", type=str, help="Path to input CSV file")
-    parser.add_argument("--output", type=str, help="Path to output CSV file")
+    parser = argparse.ArgumentParser(description="Run clustering using PCA + DBSCAN/HDBSCAN (filtered)")
+    parser.add_argument("--input", type=str, help="Path to input Parquet file")
+    parser.add_argument("--output", type=str, help="Path to output TSV file")
     parser.add_argument("--components", type=int, default=50, help="Number of PCA components (default: 50)")
-    parser.add_argument("--min_samples", type=int, default=5, help="min_samples parameter for DBSCAN (default: 5)")
+    parser.add_argument("--min_samples", type=int, default=5, help="min_samples for DBSCAN (default: 5)")
     parser.add_argument("--kth_neighbor", type=int, default=4,
-                        help="k-th neighbor parameter for Knee estimation (default: 4)")
+                        help="k-th neighbor for Knee estimation (default: 4)")
+    parser.add_argument("--algo", type=str, choices=["dbscan", "hdbscan"], default="dbscan",
+                        help="Algorithm at clustering step (default: dbscan)")
     args = parser.parse_args()
 
     logging.info("Loading data...")
     df = pd.read_parquet(args.input)
 
     logging.info('Preparing data for clustering...')
-    df = prepare_data_for_clustering(df, n_components=args.components)
+    df_emb = prepare_data_for_clustering(df, n_components=args.components)
 
+    # Эти шаги остаются ВСЕГДА, независимо от выбора алгоритма:
     logging.info('Evaluating k-neighbors distance matrix...')
-    distances = get_k_neighbors_distance_matrix(df, n_neighbors=args.kth_neighbor)
+    distances = get_k_neighbors_distance_matrix(df_emb, n_neighbors=args.kth_neighbor)
 
-    logging.info('Estimating epsilon for dbscan...')
-    eps = estimate_dbscan_eps(df, distances=distances[:, args.kth_neighbor - 1])
+    logging.info('Estimating epsilon (for filtering and DBSCAN eps)...')
+    eps = estimate_dbscan_eps(df_emb, distances=distances[:, args.kth_neighbor - 1])
 
-    logging.info("Starting clustering...")
-    labels = run_dbscan_clustering(df,
-                                   eps=eps,
-                                   closest_neigh_dist_array=distances[:, 1],
-                                   min_samples=args.min_samples)
+    logging.info(f"Starting clustering with '{args.algo}' (filter d1<=eps is applied)...")
+    labels = run_dbscan_clustering(
+        df_emb,
+        eps=eps,
+        closest_neigh_dist_array=distances[:, 1],
+        min_samples=args.min_samples,
+        algo=args.algo,
+    )
 
-    df["cluster"] = labels
-    df.to_csv(args.output, sep='\t')
+    df_out = df.copy()
+    df_out["cluster"] = labels
+    df_out.to_csv(args.output, sep='\t', index=False)
     logging.info(f"Clustering results saved to {args.output}")
 
 
