@@ -21,7 +21,7 @@ classifiers = [
 keywords = ["antigen", "antibody", "t-cell", "receptor", "sequence", "embedding"]
 requires-python = ">=3.10"
 dependencies = [
-  "mir@git+https://github.com/antigenomics/mirpy.git@0.1.1-mirpy-test",
+  "mir@git+https://github.com/antigenomics/mirpy.git@0.1.2-mirpy-fastAlign",
   "numpy==1.26.4",
   "scipy==1.11.4",
   "pandas==2.0.3",
