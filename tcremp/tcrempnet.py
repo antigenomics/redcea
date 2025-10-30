@@ -150,7 +150,7 @@ def main():
     distances = get_k_neighbors_distance_matrix(df, n_neighbors=args.k_neighbors)
 
     logging.info('Estimating epsilon for dbscan (by sample embeddings)...')
-    eps = estimate_dbscan_eps(df, distances=distances[:, args.k_neighbors - 1])
+    eps = estimate_dbscan_eps(df[:sample_size], distances=distances[:sample_size, args.k_neighbors - 1])
     # eps_sample = estimate_dbscan_eps(df[:sample_size], distances=distances[:sample_size, args.k_neighbors - 1])
     # eps_background = estimate_dbscan_eps(df[sample_size:], distances=distances[sample_size:, args.k_neighbors - 1])
     # eps = (eps_sample * sample_size + eps_background * background_size) / (sample_size + background_size)
