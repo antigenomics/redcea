@@ -13,6 +13,7 @@ from sklearn.cluster import DBSCAN, HDBSCAN
 from kneed import KneeLocator
 from tcremp.utils import log_memory_usage
 import faiss
+from pathlib import Path
 
 
 def standardize_data(data: np.ndarray):
@@ -63,130 +64,97 @@ def get_k_neighbors_distance_matrix(data, n_neighbors=4):
     return distances
 
 
-def estimate_dbscan_eps(data, distances, poly_degree=10):
-    total_start = time.time()
+def build_or_load_index(data: np.ndarray, index_path: str | Path, rebuild: bool = False):
+    index_path = Path(index_path)
+    d = data.shape[1]
 
-    total_num = len(data)
-    number_of_points_for_knee = min(total_num, max(20000, int(total_num * 0.2)))
-    chosen_elements = np.random.choice(distances, size=number_of_points_for_knee)
-    distances_sorted = np.sort(chosen_elements)
-
-    knee = KneeLocator(range(1, len(distances_sorted) + 1),
-                       distances_sorted,
-                       S=1.0,
-                       curve="concave",
-                       interp_method="polynomial",
-                       polynomial_degree=poly_degree,
-                       online=True,
-                       direction="increasing", )
-
-    eps = distances_sorted[knee.knee]
-    logging.info(f"Estimated eps for DBSCAN: {eps:.4f}, total time: {(time.time() - total_start):.2f} sec.")
-    return eps
-
-
-def cluster_dbscan_with_filter(data, eps, min_samples, d1, algo="dbscan"):
-    """
-    Фильтр d1<=eps сохраняем, а выбор алгоритма делаем только при fit_predict:
-    - dbscan: DBSCAN(eps=..., min_samples=...)
-    - hdbscan: HDBSCAN() (без наших дефолтов)
-    """
-    try:
-        data = data.to_numpy()
-    except Exception:
-        pass
-
-    n_total = data.shape[0]
     start = time.time()
+    if index_path.exists() and not rebuild:
+        index = faiss.read_index(str(index_path))
+        elapsed = time.time() - start
+        logging.info(f"Loaded existing FAISS index from {index_path} in {elapsed:.2f} sec.")
+        return index
 
-    mask = d1 <= eps
-    n_filtered_out = np.sum(~mask)
-    logging.info(
-        f"Filtered out {n_filtered_out} points out of {n_total} ({n_filtered_out / n_total:.2%}) due to large d1 > eps"
-    )
-    filtered_data = data[mask]
-
-    if algo == "dbscan":
-        model_name = "DBSCAN"
-        model = DBSCAN(eps=eps, min_samples=min_samples)
-    else:
-        model_name = "HDBSCAN"
-        model = HDBSCAN()
-
-    filtered_labels = model.fit_predict(filtered_data)
-
-    labels = np.full(data.shape[0], -1, dtype=int)
-    labels[mask] = filtered_labels
-
+    logging.info(f"Building new FAISS index for data of shape {data.shape}...")
+    index = faiss.IndexFlatL2(d)
+    index.add(np.ascontiguousarray(data.astype('float32')))
+    faiss.write_index(index, str(index_path))
     elapsed = time.time() - start
-    n_clusters = len(set(filtered_labels)) - (1 if -1 in filtered_labels else 0)
-    n_noise = list(labels).count(-1)
-    logging.info(
-        f"Filtered {model_name} completed: clusters = {n_clusters}, noise points = {n_noise}, time: {elapsed:.2f} sec."
-    )
-    return labels
+    logging.info(f"Built and saved FAISS index to {index_path} in {elapsed:.2f} sec.")
+    return index
 
 
-def prepare_data_for_clustering(df: pd.DataFrame, n_components):
-    df = standardize_data(df.values)
-    log_memory_usage('after standardization')
+def compute_blockwise_distances(
+    bg: np.ndarray,
+    sample: np.ndarray,
+    k_neighbors: int,
+    bg_index_path: str | Path,
+    sample_index_path: str | Path,
+    rebuild_bg: bool = False,
+    rebuild_sample: bool = True,
+    save_blocks: bool = True,
+    output_dir: str | Path = None,
+):
+    bg = np.ascontiguousarray(bg.astype('float32'))
+    sample = np.ascontiguousarray(sample.astype('float32'))
+    n_bg, n_sample = len(bg), len(sample)
 
-    df = apply_pca(df, n_components=n_components)
-    log_memory_usage('after reduction')
-    return df
+    logging.info(f"=== Starting blockwise FAISS distance computation ===")
+    logging.info(f"Background vectors: {n_bg}, sample vectors: {n_sample}, dim={bg.shape[1]}")
 
+    t_total = time.time()
 
-def run_dbscan_clustering(df: pd.DataFrame, eps, closest_neigh_dist_array, min_samples: int = 5, algo: str = "dbscan"):
-    labels = cluster_dbscan_with_filter(
-        df, eps=eps, min_samples=min_samples, d1=closest_neigh_dist_array, algo=algo
-    )
-    log_memory_usage(f'after {algo}')
-    return labels
+    # Build or load indices
+    t0 = time.time()
+    index_bg = build_or_load_index(bg, bg_index_path, rebuild=rebuild_bg)
+    t_bg = time.time() - t0
 
+    t0 = time.time()
+    index_sample = build_or_load_index(sample, sample_index_path, rebuild=rebuild_sample)
+    t_sample = time.time() - t0
 
-def main():
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
-    )
+    logging.info(f"Index setup: bg {t_bg:.2f}s, sample {t_sample:.2f}s")
 
-    parser = argparse.ArgumentParser(description="Run clustering using PCA + DBSCAN/HDBSCAN (filtered)")
-    parser.add_argument("--input", type=str, help="Path to input Parquet file")
-    parser.add_argument("--output", type=str, help="Path to output TSV file")
-    parser.add_argument("--components", type=int, default=50, help="Number of PCA components (default: 50)")
-    parser.add_argument("--min_samples", type=int, default=5, help="min_samples for DBSCAN (default: 5)")
-    parser.add_argument("--kth_neighbor", type=int, default=4,
-                        help="k-th neighbor for Knee estimation (default: 4)")
-    parser.add_argument("--algo", type=str, choices=["dbscan", "hdbscan"], default="dbscan",
-                        help="Algorithm at clustering step (default: dbscan)")
-    args = parser.parse_args()
+    # Compute distances
+    t0 = time.time()
+    logging.info("Computing bg→bg distances...")
+    D_bg_bg, _ = index_bg.search(bg, k_neighbors)
+    t_bg_bg = time.time() - t0
+    logging.info(f"bg→bg done in {t_bg_bg:.2f} sec.")
 
-    logging.info("Loading data...")
-    df = pd.read_parquet(args.input)
+    t0 = time.time()
+    logging.info("Computing sample→bg distances...")
+    D_sample_bg, _ = index_bg.search(sample, k_neighbors)
+    t_sbg = time.time() - t0
+    logging.info(f"sample→bg done in {t_sbg:.2f} sec.")
 
-    logging.info('Preparing data for clustering...')
-    df_emb = prepare_data_for_clustering(df, n_components=args.components)
+    t0 = time.time()
+    logging.info("Computing sample→sample distances...")
+    D_sample_sample, _ = index_sample.search(sample, k_neighbors)
+    t_ss = time.time() - t0
+    logging.info(f"sample→sample done in {t_ss:.2f} sec.")
 
-    # Эти шаги остаются ВСЕГДА, независимо от выбора алгоритма:
-    logging.info('Evaluating k-neighbors distance matrix...')
-    distances = get_k_neighbors_distance_matrix(df_emb, n_neighbors=args.kth_neighbor)
+    # Combine into one block matrix
+    t0 = time.time()
+    logging.info("Combining distance blocks...")
+    D_full = np.zeros((n_bg + n_sample, n_bg + n_sample), dtype=np.float32)
+    D_full[:n_bg, :n_bg] = np.sqrt(D_bg_bg[:, [1]]) if D_bg_bg.ndim == 2 else 0
+    D_full[:n_bg, n_bg:] = np.sqrt(D_sample_bg.T)
+    D_full[n_bg:, :n_bg] = np.sqrt(D_sample_bg)
+    D_full[n_bg:, n_bg:] = np.sqrt(D_sample_sample)
+    t_combine = time.time() - t0
+    logging.info(f"Blocks combined in {t_combine:.2f} sec.")
 
-    logging.info('Estimating epsilon (for filtering and DBSCAN eps)...')
-    eps = estimate_dbscan_eps(df_emb, distances=distances[:, args.kth_neighbor - 1])
+    if save_blocks and output_dir:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        np.save(output_dir / "D_bg_bg.npy", D_bg_bg)
+        np.save(output_dir / "D_sample_bg.npy", D_sample_bg)
+        np.save(output_dir / "D_sample_sample.npy", D_sample_sample)
+        np.save(output_dir / "D_full.npy", D_full)
+        logging.info(f"Saved distance blocks to {output_dir}")
 
-    logging.info(f"Starting clustering with '{args.algo}' (filter d1<=eps is applied)...")
-    labels = run_dbscan_clustering(
-        df_emb,
-        eps=eps,
-        closest_neigh_dist_array=distances[:, 1],
-        min_samples=args.min_samples,
-        algo=args.algo,
-    )
+    t_total = time.time() - t_total
+    logging.info(f"=== Total blockwise FAISS time: {t_total:.2f} sec ===")
 
-    df_out = df.copy()
-    df_out["cluster"] = labels
-    df_out.to_csv(args.output, sep='\t', index=False)
-    logging.info(f"Clustering results saved to {args.output}")
-
-
-if __name__ == "__main__":
-    main()
+    return D_full

@@ -20,8 +20,10 @@ from tcremp.utils import (
 )
 from tcremp.tcremp_run import run_tcremp_embedding
 from mir.common.segments import SegmentLibrary
-from tcremp.tcremp_cluster import run_dbscan_clustering, prepare_data_for_clustering, get_k_neighbors_distance_matrix, \
-    estimate_dbscan_eps
+from tcremp.tcremp_cluster import (
+    run_dbscan_clustering, prepare_data_for_clustering, estimate_dbscan_eps,
+    compute_blockwise_distances
+)
 
 
 def setup_environment(args):
@@ -97,8 +99,7 @@ def compute_cluster_summary(cluster_df, sample_ids):
 def main():
     args = get_arguments_enrich()
 
-    input_sample_path, input_background_path, proto_path, output_path, prefix, chain, locus, lib = setup_environment(
-        args)
+    input_sample_path, input_background_path, proto_path, output_path, prefix, chain, locus, lib = setup_environment(args)
 
     log_memory_usage('Init')
     logging.info("Starting TCRempNet pipeline...")
@@ -146,15 +147,25 @@ def main():
     logging.info('Preparing data for clustering...')
     df = prepare_data_for_clustering(joint_embeddings, n_components=args.cluster_pc_components)
 
-    logging.info('Evaluating k-neighbors distance matrix...')
-    distances = get_k_neighbors_distance_matrix(df, n_neighbors=args.k_neighbors)
+    # === Новый шаг: блочный расчёт расстояний через FAISS ===
+    logging.info('Evaluating blockwise k-neighbors distance matrix via FAISS...')
+    bg_data = df[sample_size:].to_numpy()
+    sample_data = df[:sample_size].to_numpy()
+
+    distances = compute_blockwise_distances(
+        bg=bg_data,
+        sample=sample_data,
+        k_neighbors=args.k_neighbors,
+        bg_index_path=Path(output_path) / "faiss_bg.index",
+        sample_index_path=Path(output_path) / f"{prefix}_sample.index",
+        rebuild_bg=False,
+        rebuild_sample=True,
+        save_blocks=True,
+        output_dir=output_path,
+    )
 
     logging.info('Estimating epsilon for dbscan (by sample embeddings)...')
-    eps = estimate_dbscan_eps(df[:sample_size], distances=distances[:sample_size, args.k_neighbors - 1])
-    # eps_sample = estimate_dbscan_eps(df[:sample_size], distances=distances[:sample_size, args.k_neighbors - 1])
-    # eps_background = estimate_dbscan_eps(df[sample_size:], distances=distances[sample_size:, args.k_neighbors - 1])
-    # eps = (eps_sample * sample_size + eps_background * background_size) / (sample_size + background_size)
-    # logging.info(f'Weighted epsilon is {eps}')
+    eps = estimate_dbscan_eps(df[:sample_size], distances=distances[:sample_size, 1])
 
     logging.info(f"Starting clustering with algo='{args.cluster_algo}' ...")
     clust = run_dbscan_clustering(
@@ -163,7 +174,7 @@ def main():
         closest_neigh_dist_array=distances[:, 1],
         min_samples=args.cluster_min_samples,
         algo=args.cluster_algo,       
-)
+    )
     log_memory_usage("After clustering")
 
     cluster_df = pd.DataFrame({'clone_id': joint_ids, 'cluster_id': clust})
