@@ -5,6 +5,7 @@ import logging
 import multiprocessing as mp
 import pandas as pd
 from pathlib import Path
+import faiss
 
 from pympler import asizeof, muppy, summary as sm
 
@@ -22,8 +23,9 @@ from tcremp.tcremp_run import run_tcremp_embedding
 from mir.common.segments import SegmentLibrary
 from tcremp.tcremp_cluster import (
     run_dbscan_clustering, prepare_data_for_clustering, estimate_dbscan_eps,
-    compute_blockwise_distances
+    compute_blockwise_knn_merged         
 )
+
 
 
 def setup_environment(args):
@@ -37,6 +39,8 @@ def setup_environment(args):
     chain = args.chain.split('_')
     locus = {'TRA': 'alpha', 'TRB': 'beta', 'TRA_TRB': None}[args.chain]
     lib = SegmentLibrary.load_default(genes=chain, organisms=args.species)
+    faiss.omp_set_num_threads(args.nproc)
+    print(f"FAISS threads set to {faiss.omp_get_max_threads()}")
 
     return input_sample_path, input_background_path, proto_path, output_path, prefix, chain, locus, lib
 
@@ -132,6 +136,21 @@ def main():
 
     log_memory_usage("After loading embeddings")
 
+    sample_index_path = None
+    bg_index_path = None
+
+    # если заданы конкретные пути к parquet — используем их как основу
+    sample_index_path = Path(args.sample_embedding).with_suffix('').with_name(
+        Path(args.sample_embedding).stem + "_faiss.index"
+    )
+    bg_index_path = Path(args.background_embedding).with_suffix('').with_name(
+        Path(args.background_embedding).stem + "_faiss.index"
+    )
+
+    logging.info(f"Sample FAISS index path: {sample_index_path}")
+    logging.info(f"Background FAISS index path: {bg_index_path}")
+
+
     joint_embeddings = pd.concat([sample_emb, background_emb], ignore_index=True)
     joint_representations = pd.concat([sample_representations, background_representations], ignore_index=True)
     sample_size = len(sample_emb)
@@ -149,29 +168,30 @@ def main():
 
     # === Новый шаг: блочный расчёт расстояний через FAISS ===
     logging.info('Evaluating blockwise k-neighbors distance matrix via FAISS...')
-    bg_data = df[sample_size:].to_numpy()
-    sample_data = df[:sample_size].to_numpy()
+    bg_data = df[sample_size:]
+    sample_data = df[:sample_size]
 
-    distances = compute_blockwise_distances(
+    distances = compute_blockwise_knn_merged(
         bg=bg_data,
         sample=sample_data,
         k_neighbors=args.k_neighbors,
-        bg_index_path=Path(output_path) / "faiss_bg.index",
-        sample_index_path=Path(output_path) / f"{prefix}_sample.index",
+        bg_index_path=bg_index_path,
+        sample_index_path=sample_index_path,
         rebuild_bg=False,
         rebuild_sample=True,
         save_blocks=True,
         output_dir=output_path,
+        nproc=args.nproc
     )
 
     logging.info('Estimating epsilon for dbscan (by sample embeddings)...')
-    eps = estimate_dbscan_eps(df[:sample_size], distances=distances[:sample_size, 1])
+    eps = estimate_dbscan_eps(df[:sample_size], distances=distances[:sample_size, args.k_neighbors - 1])
 
     logging.info(f"Starting clustering with algo='{args.cluster_algo}' ...")
     clust = run_dbscan_clustering(
         df,
         eps=eps,
-        closest_neigh_dist_array=distances[:, 1],
+        closest_neigh_dist_array=distances[:, args.k_neighbors - 1],
         min_samples=args.cluster_min_samples,
         algo=args.cluster_algo,       
     )
