@@ -22,10 +22,14 @@ from tcremp.utils import (
 from tcremp.tcremp_run import run_tcremp_embedding
 from mir.common.segments import SegmentLibrary
 from tcremp.tcremp_cluster import (
-    run_dbscan_clustering, prepare_data_for_clustering, estimate_dbscan_eps,
-    compute_blockwise_knn_merged         
+    run_dbscan_clustering,
+    prepare_data_for_clustering,
+    estimate_dbscan_eps,
+    compute_blockwise_knn_merged,
+    run_leiden_clustering,
+    hierarchical_leiden_clustering,
+    hierarchical_leiden_dbscan_clustering
 )
-
 
 
 def setup_environment(args):
@@ -55,13 +59,18 @@ def compute_embeddings_if_needed(path, args, is_sample, proto, chain, lib, locus
         return
 
     logging.info(f"Computing {tag} embeddings...")
+    
+        # -------------------------
+    # NEW: take only first N bg points
+    # -------------------------
+    if (not is_sample) and args.n_bg_points:
+        logging.info(f"Subsampling background to first {args.n_bg_points} clonotypes")
+        rep = rep.sample_n(args.n_bg_points, sample_random=False)
+    # -------------------------
+    
     rep = load_analysis_repertoire(path, lib, locus, args.index_col, args.lower_len_cdr3, args.higher_len_cdr3)
     rep = subsample_repertoire(rep, args.n_clonotypes, args.sample_random_prototypes, args.random_seed)
     run_tcremp_embedding(rep, proto, lib, chain, args.metrics, args.nproc, emb_path)
-
-    del rep
-    logging.info(f"Saved {tag} embeddings to {emb_path}")
-    log_memory_usage('Inside the function')
 
 
 def load_embeddings(path, args, is_sample, lib, locus, prefix, output_path):
@@ -69,9 +78,26 @@ def load_embeddings(path, args, is_sample, lib, locus, prefix, output_path):
     prefix_tag = 's_' if is_sample else 'b_'
     custom_path = args.sample_embedding if is_sample else args.background_embedding
     emb_path = resolve_embedding_file(custom_path, output_path, prefix, tag, must_exist=True)
+
     emb = pd.read_parquet(emb_path)
 
+    # -------------------------
+    # NEW: limit background embeddings
+    # -------------------------
+    if (not is_sample) and args.n_bg_points:
+        logging.info(f"Restricting background embeddings to first {args.n_bg_points}")
+        emb = emb.iloc[:args.n_bg_points]
+    # -------------------------
+
     rep = load_analysis_repertoire(path, lib, locus, args.index_col, args.lower_len_cdr3, args.higher_len_cdr3)
+
+    # -------------------------
+    # NEW: restrict background rep to match embeddings
+    # -------------------------
+    if (not is_sample) and args.n_bg_points:
+        rep = rep.sample_n(args.n_bg_points, sample_random=False)
+    # -------------------------
+
     rep = subsample_repertoire(rep, args.n_clonotypes, args.sample_random_prototypes, args.random_seed)
 
     rep_df = get_representations_df(rep, locus)
@@ -81,7 +107,6 @@ def load_embeddings(path, args, is_sample, lib, locus, prefix, output_path):
     del rep
     gc.collect()
     return emb, rep_df, ids
-
 
 def compute_cluster_summary(cluster_df, sample_ids):
     sample_ids_set = set(sample_ids)
@@ -108,31 +133,29 @@ def main():
     log_memory_usage('Init')
     logging.info("Starting TCRempNet pipeline...")
 
-    log_memory_usage("Start. Loading prototypes")
-    proto = load_prototype_repertoire(proto_path, lib, locus, args.index_col)
-    proto = subsample_repertoire(proto, args.n_prototypes, args.sample_random_clonotypes, args.random_seed)
-
     logging.info("Computing sample embeddings if needed...")
-    compute_embeddings_if_needed(input_sample_path, args, is_sample=True, proto=proto, chain=chain, lib=lib,
-                                 locus=locus, prefix=prefix, output_path=output_path)
-    gc.collect()
-    log_memory_usage("After computing sample embeddings")
+    compute_embeddings_if_needed(
+        input_sample_path, args, is_sample=True, proto=proto_path,
+        chain=chain, lib=lib, locus=locus, prefix=prefix, output_path=output_path
+    )
 
     logging.info("Computing background embeddings if needed...")
-    compute_embeddings_if_needed(input_background_path, args, is_sample=False, proto=proto, chain=chain, lib=lib,
-                                 locus=locus, prefix=prefix, output_path=output_path)
-    gc.collect()
-    log_memory_usage("After computing background embeddings")
+    compute_embeddings_if_needed(
+        input_background_path, args, is_sample=False, proto=proto_path,
+        chain=chain, lib=lib, locus=locus, prefix=prefix, output_path=output_path
+    )
 
     logging.info("Loading sample embeddings...")
-    sample_emb, sample_representations, sample_ids = load_embeddings(input_sample_path, args, is_sample=True, lib=lib,
-                                                                     locus=locus, prefix=prefix,
-                                                                     output_path=output_path)
+    sample_emb, sample_representations, sample_ids = load_embeddings(
+        input_sample_path, args, is_sample=True, lib=lib,
+        locus=locus, prefix=prefix, output_path=output_path
+    )
 
     logging.info("Loading background embeddings...")
-    background_emb, background_representations, background_ids = load_embeddings(input_background_path, args,
-                                                                                 is_sample=False, lib=lib, locus=locus,
-                                                                                 prefix=prefix, output_path=output_path)
+    background_emb, background_representations, background_ids = load_embeddings(
+        input_background_path, args, is_sample=False, lib=lib,
+        locus=locus, prefix=prefix, output_path=output_path
+    )
 
     log_memory_usage("After loading embeddings")
 
@@ -150,15 +173,17 @@ def main():
     logging.info(f"Sample FAISS index path: {sample_index_path}")
     logging.info(f"Background FAISS index path: {bg_index_path}")
 
-
     joint_embeddings = pd.concat([sample_emb, background_emb], ignore_index=True)
-    joint_representations = pd.concat([sample_representations, background_representations], ignore_index=True)
+    joint_representations = pd.concat(
+        [sample_representations, background_representations],
+        ignore_index=True
+    )
     sample_size = len(sample_emb)
-    background_size = len(background_emb)
+    joint_ids = pd.concat([sample_ids, background_ids], ignore_index=True)
+
     del sample_emb
     del background_emb
 
-    joint_ids = pd.concat([sample_ids, background_ids], ignore_index=True)
     log_memory_usage("After concatenation")
 
     logging.info("Running clustering...\n")
@@ -171,7 +196,7 @@ def main():
     bg_data = df[sample_size:]
     sample_data = df[:sample_size]
 
-    distances = compute_blockwise_knn_merged(
+    distances, indices = compute_blockwise_knn_merged(
         bg=bg_data,
         sample=sample_data,
         k_neighbors=args.k_neighbors,
@@ -181,23 +206,75 @@ def main():
         rebuild_sample=True,
         save_blocks=True,
         output_dir=output_path,
-        nproc=args.nproc
+        nproc=args.nproc,
     )
 
-    logging.info('Estimating epsilon for dbscan (by sample embeddings)...')
-    eps = estimate_dbscan_eps(df[:sample_size], distances=distances[:sample_size, args.k_neighbors - 1])
+    # -------------------------------------------------
+    # Clustering options
+    #   1) plain Leiden on kNN graph
+    #   2) hierarchical Leiden (Seurat-like)
+    #   3) NEW: Leiden -> DBSCAN (parallel inside communities)
+    # -------------------------------------------------
+    
+    if args.cluster_algo == "leiden_dbscan":
+        cluster_labels = hierarchical_leiden_dbscan_clustering(
+            data_reduced=df,
+            knn_indices=indices,
+            knn_distances=distances,
+            resolution=args.leiden_resolution,
+            k_neighbors=args.k_neighbors,
+            n_jobs=args.nproc
+        )
+    elif args.cluster_algo == "vdbscan":
+        logging.info("Running variable-eps DBSCAN (vDBSCAN)")
 
-    logging.info(f"Starting clustering with algo='{args.cluster_algo}' ...")
-    clust = run_dbscan_clustering(
-        df,
-        eps=eps,
-        closest_neigh_dist_array=distances[:, args.k_neighbors - 1],
-        min_samples=args.cluster_min_samples,
-        algo=args.cluster_algo,       
-    )
+        # 1) длины CDR3 — из уже загруженных representations
+        cdr3_lengths = (
+            joint_representations['cdr3aa_beta']
+            .astype(str)
+            .str.len()
+            .to_numpy()
+        )
+
+        # 2) vDBSCAN: переиспользуем уже посчитанные distances
+        cluster_labels, vdbscan_info = variable_eps_dbscan(
+            X=df.values,                       # embedding after PCA / UMAP
+            cdr3_lengths=cdr3_lengths,
+            knn_distances=distances,           # <-- reuse!
+        )
+
+        # 3) (опционально) логируем бакеты
+        logging.info("vDBSCAN length buckets:")
+        for b, eps in zip(vdbscan_info["buckets"], vdbscan_info["bucket_eps"]):
+            logging.info(
+                f"  lengths={b['lengths'][0]}..{b['lengths'][-1]} "
+                f"size={b['size']} frac={b['frac']:.3f} eps={eps:.6f}"
+            )
+    else:
+        cluster_labels = run_leiden_clustering(
+            knn_indices=knn_indices,
+            knn_distances=knn_distances,
+            resolution=args.leiden_resolution,
+            n_jobs=args.nproc
+        )
+    
+    # cluster_labels = hierarchical_leiden_clustering(
+    #     knn_indices=indices,
+    #     knn_distances=distances,
+    #     base_resolution=1.0,
+    #     sub_resolution=3.0,
+    #     n_iterations=3,
+    #     n_threads=args.nproc,
+    #     metric="dissimilarity",
+    #     min_cluster_size=5,
+    #     sub_min_cluster_size=5,
+    # )
+    
+
+    
     log_memory_usage("After clustering")
 
-    cluster_df = pd.DataFrame({'clone_id': joint_ids, 'cluster_id': clust})
+    cluster_df = pd.DataFrame({'clone_id': joint_ids, 'cluster_id': cluster_labels})
     cluster_df = cluster_df.merge(joint_representations)
     cluster_df.to_csv(f"{output_path}/{prefix}_tcremp_clusters.tsv", sep='\t', index=False)
     logging.info("Saved cluster assignments.")

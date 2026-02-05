@@ -174,8 +174,15 @@ def get_arguments_enrich():
                         help='Optional path to background embedding file (parquet). If not set, will be computed or '
                              'default name used.')
     
-    parser.add_argument("--cluster-algo", choices=["dbscan", "hdbscan"], default="dbscan",
-    help="Clustering algorithm to use (default: dbscan)."
-)
+    parser.add_argument("--cluster-algo", choices=["dbscan", "hdbscan", "vdbscan", "leiden_dbscan"], default="dbscan",
+                        help="Clustering algorithm to use (default: dbscan).")
+    
+    parser.add_argument('--n-bg-points', type=int, default=None,
+                        help='If set, only the first N clonotypes from background repertoire '
+                             'will be used for embedding + clustering.')
+    
+    parser.add_argument('-lr', '--leiden-resolution', type=float, default=1.0,
+                        help="Resolution parameter for Leiden clustering (default: 1.0)")
+
 
     return parser.parse_args()

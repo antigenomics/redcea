@@ -8,8 +8,8 @@ from tcremp.utils import configure_logging, load_prototype_repertoire, load_anal
     get_representations_df, resolve_prototype_file, \
     resolve_input_file, prepare_output_path, generate_output_prefix, subsample_repertoire, log_memory_usage
 from mir.common.segments import SegmentLibrary
-from tcremp.tcremp_cluster import run_dbscan_clustering, prepare_data_for_clustering, get_k_neighbors_distance_matrix, \
-    estimate_dbscan_eps
+# from tcremp.tcremp_cluster import run_dbscan_clustering, prepare_data_for_clustering, get_k_neighbors_distance_matrix, \
+#     estimate_dbscan_eps
 
 import logging
 import pandas as pd
@@ -79,16 +79,16 @@ def main():
     reps = pd.read_csv(f'{output_path}/{prefix}_tcremp_representations.tsv', sep='\t')
     ids = reps.clone_id
     log_memory_usage('after reps reading')
-    if args.cluster:
-        df = prepare_data_for_clustering(emb, n_components=args.cluster_pc_components)
-        distances = get_k_neighbors_distance_matrix(df, n_neighbors=args.k_neighbors)
-        eps = estimate_dbscan_eps(df, distances=distances[:, args.k_neighbors - 1])
-        clust = run_dbscan_clustering(df,
-                                      eps=eps,
-                                      closest_neigh_dist_array=distances[:, 1],
-                                      min_samples=args.cluster_min_samples)
-        pd.DataFrame({'clone_id': ids, 'cluster_id': clust}).merge(reps).to_csv(
-            f"{output_path}/{prefix}_tcremp_clusters.tsv", sep='\t', index=False)
+    # if args.cluster:
+    #     df = prepare_data_for_clustering(emb, n_components=args.cluster_pc_components)
+    #     distances = get_k_neighbors_distance_matrix(df, n_neighbors=args.k_neighbors)
+    #     eps = estimate_dbscan_eps(df, distances=distances[:, args.k_neighbors - 1])
+    #     clust = run_dbscan_clustering(df,
+    #                                   eps=eps,
+    #                                   closest_neigh_dist_array=distances[:, 1],
+    #                                   min_samples=args.cluster_min_samples)
+    #     pd.DataFrame({'clone_id': ids, 'cluster_id': clust}).merge(reps).to_csv(
+    #         f"{output_path}/{prefix}_tcremp_clusters.tsv", sep='\t', index=False)
 
     if args.save_dists:
         emb['clone_id'] = ids
