@@ -7,6 +7,7 @@ from .eps_estimation import (
     cluster_dbscan,
     estimate_eps_by_group_from_sample,
     eps_per_point_from_group_id,
+    estimate_eps_by_group_flexible
 )
 
 from .cdr3_grouping import (
@@ -44,6 +45,7 @@ __all__ = [
     "cluster_dbscan",
     "estimate_eps_by_group_from_sample",
     "eps_per_point_from_group_id",
+    "estimate_eps_by_group_flexible",
 
     # grouping
     "compute_cdr3_len",

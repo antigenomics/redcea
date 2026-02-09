@@ -161,7 +161,7 @@ CMD=(python /home/evlasova/tcrempnet/tcremp/tcrempnet.py
 if [[ "${ALGO}" == "leiden" ]]; then
   CMD+=(--leiden-resolution "${LR}")
 elif [[ "${ALGO}" == "hierarchical_leiden" ]]; then
-  CMD+=(--leiden-resolution "${LR}" --sub-leiden-resolution "${SLR}")
+  CMD+=(--leiden-resolution "${LR}" --leiden-sub-resolution "${SLR}")
 elif [[ "${ALGO}" == "leiden_dbscan" ]]; then
   CMD+=(--leiden-resolution "${LR}" -ms "${MS}")
 elif [[ "${ALGO}" == "vdbscan" ]]; then

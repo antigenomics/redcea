@@ -62,6 +62,11 @@ def estimate_dbscan_eps(
     )
 
     if knee.knee is not None:
+        if knee.knee < 1 or knee.knee > len(kth_distances):
+            logging.warning(
+                f"KneeLocator returned invalid knee index {knee.knee}, returning cluster max."
+            )
+            eps = kth_distances[-1]
         eps = kth_distances[knee.knee]
     else:
         eps = kth_distances[int(len(kth_distances) * quantile)]
