@@ -242,7 +242,7 @@ def main():
             knn_indices=indices,
             knn_distances=distances,
             base_resolution=args.leiden_resolution,
-            sub_resolution=args.sub_leiden_resolution,
+            sub_resolution=args.leiden_sub_resolution,
             n_iterations=3,
             n_threads=args.nproc,
             metric="dissimilarity",
