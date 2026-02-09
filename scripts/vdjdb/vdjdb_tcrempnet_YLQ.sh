@@ -1,19 +1,19 @@
 #!/bin/sh
 
-#SBATCH --job-name=tcrempnet_vdjdb_YLQ_vdbscan       # Job name
-#SBATCH --cpus-per-task=16     # Run on a single CPU
+#SBATCH --job-name=tcrempnet_vdjdb_YLQ       # Job name
+#SBATCH --cpus-per-task=32     # Run on a single CPU
 #SBATCH --mem=256gb                 # Job memory request
-#SBATCH --time=2:00:00           # Time limit hrs:min:sec
+#SBATCH --time=24:00:00           # Time limit hrs:min:sec
 #SBATCH --output=JobName.%j.log   # Standard output and error log
 #SBATCH --constraint=hpc
-#SBATCH --partition=short
+#SBATCH --partition=long
 
 
-python tcrempnet.py \
+tcrempnet \
   --sample /projects/immunestatus/vdjdb/airr_format/trb_vdjdb_YLQPRTFLL.tsv \
   --background /projects/immunestatus/vdjdb/airr_format/trb_background.tsv \
-  --output /projects/immunestatus/vdjdb/tcrempnet_YLQPRTFLL_trb_vdbscan \
+  --output /projects/immunestatus/vdjdb/tcrempnet_YLQPRTFLL_trb_leiden \
   --chain TRB -np 16 \
   -se /projects/immunestatus/vdjdb/tcremp/trb_vdjdb_YLQPRTFLL_embeddings.parquet \
   -be /projects/immunestatus/vdjdb/tcremp/trb_background_embeddings.parquet \
-  -kn 10 --n-bg-points 100000 -lr 1 -ms 5 --cluster-algo vdbscan --eps-estimation-based-on background
+  -kn 20

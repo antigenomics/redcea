@@ -1,3 +1,4 @@
+# tcrempnet.py
 import sys
 import os
 import gc
@@ -14,21 +15,29 @@ sys.path.append("../../mirpy")
 
 from tcremp.arguments import get_arguments_enrich
 from tcremp.utils import (
-    configure_logging, load_prototype_repertoire, load_analysis_repertoire,
+    configure_logging, load_analysis_repertoire,
     get_representations_df, resolve_prototype_file, resolve_input_file,
     prepare_output_path, generate_output_prefix, subsample_repertoire,
     log_memory_usage, resolve_embedding_file, add_z_binom_pvalues, add_log_fold_change
 )
 from tcremp.tcremp_run import run_tcremp_embedding
 from mir.common.segments import SegmentLibrary
-from tcremp.tcremp_cluster import (
-    run_dbscan_clustering,
+
+# ✅ NEW clustering package
+from tcremp.clustering import (
     prepare_data_for_clustering,
-    estimate_dbscan_eps,
-    compute_blockwise_knn_merged,
+    compute_blockwise_knn_merged,      # split knn: ss,bb,sb,bs
+    build_joint_knn_from_split,        # make joint knn for Leiden variants
+    compute_cdr3_len,
+    build_len_to_group_id,
+    map_len_to_group_id,
+    estimate_eps_by_group_from_sample,
+    estimate_eps_by_group_flexible,
+    eps_per_point_from_group_id,
+    vdbscan_from_knn,
     run_leiden_clustering,
     hierarchical_leiden_clustering,
-    hierarchical_leiden_dbscan_clustering
+    hierarchical_leiden_dbscan_clustering,
 )
 
 
@@ -43,6 +52,7 @@ def setup_environment(args):
     chain = args.chain.split('_')
     locus = {'TRA': 'alpha', 'TRB': 'beta', 'TRA_TRB': None}[args.chain]
     lib = SegmentLibrary.load_default(genes=chain, organisms=args.species)
+
     faiss.omp_set_num_threads(args.nproc)
     print(f"FAISS threads set to {faiss.omp_get_max_threads()}")
 
@@ -56,21 +66,20 @@ def compute_embeddings_if_needed(path, args, is_sample, proto, chain, lib, locus
 
     if emb_path.exists():
         logging.info(f"Found existing {tag} embeddings at {emb_path}")
-        return
+        return emb_path
 
     logging.info(f"Computing {tag} embeddings...")
-    
-        # -------------------------
-    # NEW: take only first N bg points
-    # -------------------------
-    if (not is_sample) and args.n_bg_points:
-        logging.info(f"Subsampling background to first {args.n_bg_points} clonotypes")
-        rep = rep.sample_n(args.n_bg_points, sample_random=False)
-    # -------------------------
-    
+
     rep = load_analysis_repertoire(path, lib, locus, args.index_col, args.lower_len_cdr3, args.higher_len_cdr3)
+
+    # OPTIONAL deterministic truncation for bg
+    if (not is_sample) and getattr(args, "n_bg_points", None):
+        logging.info(f"Restricting background repertoire to first {args.n_bg_points} clonotypes (pre-embedding)")
+        rep = rep.sample_n(args.n_bg_points, sample_random=False)
+
     rep = subsample_repertoire(rep, args.n_clonotypes, args.sample_random_prototypes, args.random_seed)
     run_tcremp_embedding(rep, proto, lib, chain, args.metrics, args.nproc, emb_path)
+    return emb_path
 
 
 def load_embeddings(path, args, is_sample, lib, locus, prefix, output_path):
@@ -81,22 +90,14 @@ def load_embeddings(path, args, is_sample, lib, locus, prefix, output_path):
 
     emb = pd.read_parquet(emb_path)
 
-    # -------------------------
-    # NEW: limit background embeddings
-    # -------------------------
-    if (not is_sample) and args.n_bg_points:
+    if (not is_sample) and getattr(args, "n_bg_points", None):
         logging.info(f"Restricting background embeddings to first {args.n_bg_points}")
         emb = emb.iloc[:args.n_bg_points]
-    # -------------------------
 
     rep = load_analysis_repertoire(path, lib, locus, args.index_col, args.lower_len_cdr3, args.higher_len_cdr3)
 
-    # -------------------------
-    # NEW: restrict background rep to match embeddings
-    # -------------------------
-    if (not is_sample) and args.n_bg_points:
+    if (not is_sample) and getattr(args, "n_bg_points", None):
         rep = rep.sample_n(args.n_bg_points, sample_random=False)
-    # -------------------------
 
     rep = subsample_repertoire(rep, args.n_clonotypes, args.sample_random_prototypes, args.random_seed)
 
@@ -106,12 +107,14 @@ def load_embeddings(path, args, is_sample, lib, locus, prefix, output_path):
 
     del rep
     gc.collect()
-    return emb, rep_df, ids
+    return emb, rep_df, ids, emb_path
+
 
 def compute_cluster_summary(cluster_df, sample_ids):
     sample_ids_set = set(sample_ids)
     cluster_df['source'] = cluster_df['clone_id'].apply(
-        lambda x: 'sample' if x in sample_ids_set else 'background')
+        lambda x: 'sample' if x in sample_ids_set else 'background'
+    )
 
     summary = (
         cluster_df.groupby('cluster_id')['source']
@@ -123,6 +126,19 @@ def compute_cluster_summary(cluster_df, sample_ids):
     summary['cluster_size'] = summary.get('sample', 0) + summary.get('background', 0)
     summary = summary[summary.cluster_id != -1]
     return summary
+
+
+def _pick_cdr3_col(joint_representations: pd.DataFrame) -> str:
+    if "cdr3aa_beta" in joint_representations.columns:
+        return "cdr3aa_beta"
+    if "cdr3aa_alpha" in joint_representations.columns:
+        return "cdr3aa_alpha"
+    if "cdr3aa" in joint_representations.columns:
+        return "cdr3aa"
+    raise ValueError(
+        "Cannot find CDR3 AA column in representations. "
+        "Expected one of: cdr3aa_beta, cdr3aa_alpha, cdr3aa"
+    )
 
 
 def main():
@@ -146,29 +162,22 @@ def main():
     )
 
     logging.info("Loading sample embeddings...")
-    sample_emb, sample_representations, sample_ids = load_embeddings(
+    sample_emb, sample_representations, sample_ids, sample_emb_path = load_embeddings(
         input_sample_path, args, is_sample=True, lib=lib,
         locus=locus, prefix=prefix, output_path=output_path
     )
 
     logging.info("Loading background embeddings...")
-    background_emb, background_representations, background_ids = load_embeddings(
+    background_emb, background_representations, background_ids, bg_emb_path = load_embeddings(
         input_background_path, args, is_sample=False, lib=lib,
         locus=locus, prefix=prefix, output_path=output_path
     )
 
     log_memory_usage("After loading embeddings")
 
-    sample_index_path = None
-    bg_index_path = None
-
-    # если заданы конкретные пути к parquet — используем их как основу
-    sample_index_path = Path(args.sample_embedding).with_suffix('').with_name(
-        Path(args.sample_embedding).stem + "_faiss.index"
-    )
-    bg_index_path = Path(args.background_embedding).with_suffix('').with_name(
-        Path(args.background_embedding).stem + "_faiss.index"
-    )
+    # FAISS index paths derived from embedding parquet paths
+    sample_index_path = Path(sample_emb_path).with_suffix("").with_name(Path(sample_emb_path).stem + "_faiss.index")
+    bg_index_path = Path(bg_emb_path).with_suffix("").with_name(Path(bg_emb_path).stem + "_faiss.index")
 
     logging.info(f"Sample FAISS index path: {sample_index_path}")
     logging.info(f"Background FAISS index path: {bg_index_path}")
@@ -188,15 +197,14 @@ def main():
 
     logging.info("Running clustering...\n")
 
-    logging.info('Preparing data for clustering...')
+    logging.info("Preparing data for clustering...")
     df = prepare_data_for_clustering(joint_embeddings, n_components=args.cluster_pc_components)
 
-    # === Новый шаг: блочный расчёт расстояний через FAISS ===
-    logging.info('Evaluating blockwise k-neighbors distance matrix via FAISS...')
     bg_data = df[sample_size:]
     sample_data = df[:sample_size]
 
-    distances, indices = compute_blockwise_knn_merged(
+    logging.info("Evaluating kNN via FAISS (split caches: sample-sample, bg-bg; cross on-the-fly)...")
+    dist_ss, ind_ss, dist_bb, ind_bb, dist_sb, ind_sb, dist_bs, ind_bs = compute_blockwise_knn_merged(
         bg=bg_data,
         sample=sample_data,
         k_neighbors=args.k_neighbors,
@@ -207,15 +215,17 @@ def main():
         save_blocks=True,
         output_dir=output_path,
         nproc=args.nproc,
+        bg_size_truncation=getattr(args, "n_bg_points", None)
     )
 
-    # -------------------------------------------------
-    # Clustering options
-    #   1) plain Leiden on kNN graph
-    #   2) hierarchical Leiden (Seurat-like)
-    #   3) NEW: Leiden -> DBSCAN (parallel inside communities)
-    # -------------------------------------------------
-    
+    distances, indices = build_joint_knn_from_split(
+        dist_ss=dist_ss, ind_ss=ind_ss,
+        dist_bb=dist_bb, ind_bb=ind_bb,
+        dist_sb=dist_sb, ind_sb=ind_sb,
+        dist_bs=dist_bs, ind_bs=ind_bs,
+        k_out=args.k_neighbors,
+    )
+
     if args.cluster_algo == "leiden_dbscan":
         cluster_labels = hierarchical_leiden_dbscan_clustering(
             data_reduced=df,
@@ -223,55 +233,115 @@ def main():
             knn_distances=distances,
             resolution=args.leiden_resolution,
             k_neighbors=args.k_neighbors,
+            num_points_for_core=args.cluster_min_samples,
             n_jobs=args.nproc
         )
-    elif args.cluster_algo == "vdbscan":
-        logging.info("Running variable-eps DBSCAN (vDBSCAN)")
 
-        # 1) длины CDR3 — из уже загруженных representations
-        cdr3_lengths = (
-            joint_representations['cdr3aa_beta']
-            .astype(str)
-            .str.len()
-            .to_numpy()
+    elif args.cluster_algo == "hierarchical_leiden":
+        cluster_labels = hierarchical_leiden_clustering(
+            knn_indices=indices,
+            knn_distances=distances,
+            base_resolution=args.leiden_resolution,
+            sub_resolution=args.sub_leiden_resolution,
+            n_iterations=3,
+            n_threads=args.nproc,
+            metric="dissimilarity",
+            min_cluster_size=5,
+            sub_min_cluster_size=3,
         )
 
-        # 2) vDBSCAN: переиспользуем уже посчитанные distances
-        cluster_labels, vdbscan_info = variable_eps_dbscan(
-            X=df.values,                       # embedding after PCA / UMAP
-            cdr3_lengths=cdr3_lengths,
-            knn_distances=distances,           # <-- reuse!
-        )
-
-        # 3) (опционально) логируем бакеты
-        logging.info("vDBSCAN length buckets:")
-        for b, eps in zip(vdbscan_info["buckets"], vdbscan_info["bucket_eps"]):
-            logging.info(
-                f"  lengths={b['lengths'][0]}..{b['lengths'][-1]} "
-                f"size={b['size']} frac={b['frac']:.3f} eps={eps:.6f}"
-            )
-    else:
+    elif args.cluster_algo == "leiden":
         cluster_labels = run_leiden_clustering(
-            knn_indices=knn_indices,
-            knn_distances=knn_distances,
+            knn_indices=indices,
+            knn_distances=distances,
             resolution=args.leiden_resolution,
-            n_jobs=args.nproc
+            n_jobs=args.nproc,
         )
-    
-    # cluster_labels = hierarchical_leiden_clustering(
-    #     knn_indices=indices,
-    #     knn_distances=distances,
-    #     base_resolution=1.0,
-    #     sub_resolution=3.0,
-    #     n_iterations=3,
-    #     n_threads=args.nproc,
-    #     metric="dissimilarity",
-    #     min_cluster_size=5,
-    #     sub_min_cluster_size=5,
-    # )
-    
 
-    
+    elif args.cluster_algo == "vdbscan":
+        cdr3_col = _pick_cdr3_col(joint_representations)
+        eps_estimation_based_on = args.eps_estimation_based_on
+        kth_neighbor_for_eps = args.k_neighbors
+        
+        if eps_estimation_based_on == "sample":
+            logging.info("Running vDBSCAN (eps-by-group from SAMPLE only; L2 distances)")
+            
+            # groups built from SAMPLE only
+            sample_len = compute_cdr3_len(sample_representations[cdr3_col])
+            len_to_gid = build_len_to_group_id(sample_len, min_frac=0.05)
+
+            sample_gid = map_len_to_group_id(sample_len, len_to_gid, unknown_len_policy="nearest")
+            bg_len = compute_cdr3_len(background_representations[cdr3_col])
+            bg_gid = map_len_to_group_id(bg_len, len_to_gid, unknown_len_policy="nearest")
+
+            eps_by_gid = estimate_eps_by_group_from_sample(
+                sample_group_id=sample_gid,
+                sample_ss_distances_l2=dist_ss,
+                kth_neighbor=int(kth_neighbor_for_eps),
+            )
+
+            gid_all = pd.concat([pd.Series(sample_gid), pd.Series(bg_gid)], ignore_index=True).to_numpy(dtype="int32")
+            
+        elif eps_estimation_based_on == "background":
+            logging.info("Running vDBSCAN (eps-by-group from BACKGROUND only; L2 distances)")
+            
+            # groups built from BACKGROUND only
+            bg_len = compute_cdr3_len(background_representations[cdr3_col])
+            len_to_gid = build_len_to_group_id(bg_len, min_frac=0.05)
+
+            bg_gid = map_len_to_group_id(bg_len, len_to_gid, unknown_len_policy="nearest")
+            sample_len = compute_cdr3_len(sample_representations[cdr3_col])
+            sample_gid = map_len_to_group_id(sample_len, len_to_gid, unknown_len_policy="nearest")
+
+            eps_by_gid = estimate_eps_by_group_from_sample(
+                sample_group_id=bg_gid,
+                sample_ss_distances_l2=dist_bb,
+                kth_neighbor=int(kth_neighbor_for_eps),
+            )
+
+            gid_all = pd.concat([pd.Series(sample_gid), pd.Series(bg_gid)], ignore_index=True).to_numpy(dtype="int32")
+            
+        elif eps_estimation_based_on == "all":
+            logging.info("Running vDBSCAN (eps-by-group from SAMPLE+BACKGROUND combined; L2 distances)")
+            
+            # groups built from COMBINED data
+            joint_len = compute_cdr3_len(joint_representations[cdr3_col])
+            len_to_gid = build_len_to_group_id(joint_len, min_frac=0.05)
+
+            joint_gid = map_len_to_group_id(joint_len, len_to_gid, unknown_len_policy="nearest")
+            sample_gid = joint_gid[:sample_size]
+            bg_gid = joint_gid[sample_size:]
+            gid_all = joint_gid
+            
+            # For "all" mode, we need to construct a combined distance matrix
+            # Use a strategy: estimate eps from combined kNN distances
+            eps_by_gid = estimate_eps_by_group_flexible(
+                group_id=gid_all,
+                dist_matrix=distances,
+                kth_neighbor=int(kth_neighbor_for_eps),
+            )
+        else:
+            raise ValueError(
+                f"Unknown eps_estimation_based_on='{eps_estimation_based_on}'. "
+                "Expected one of: sample, background, all"
+            )
+
+        eps_i_all = eps_per_point_from_group_id(gid_all, eps_by_gid)
+
+        cluster_labels = vdbscan_from_knn(
+            knn_indices=indices,
+            knn_distances_l2=distances,
+            eps_i_l2=eps_i_all,
+            num_points_for_core=args.cluster_min_samples,
+            sym_rule=args.vdbscan_sym_rule,
+        )
+
+    else:
+        raise ValueError(
+            f"Unknown args.cluster_algo='{args.cluster_algo}'. "
+            "Expected one of: leiden_dbscan, hierarchical_leiden, leiden, vdbscan"
+        )
+
     log_memory_usage("After clustering")
 
     cluster_df = pd.DataFrame({'clone_id': joint_ids, 'cluster_id': cluster_labels})
@@ -284,7 +354,8 @@ def main():
     summary = add_log_fold_change(summary, total_sample=len(sample_ids), total_background=len(background_ids))
     summary[['cluster_id', 'cluster_size', 'sample', 'background', 'enrichment_pvalue_zbinom', 'enrichment_fdr_zbinom',
              'log_fold_change']].to_csv(
-        f"{output_path}/{prefix}_summary_tcrempnet.tsv", sep='\t', index=False)
+        f"{output_path}/{prefix}_summary_tcrempnet.tsv", sep='\t', index=False
+    )
     logging.info("Saved cluster summary with p-values.")
 
     enriched_clusters = summary.loc[
@@ -300,7 +371,8 @@ def main():
 
     joint_embeddings['clone_id'] = joint_ids
     enriched_embeddings = enriched_clonotypes[
-        ['clone_id', 'cluster_id', 'source', 'enrichment_pvalue_zbinom']].merge(joint_embeddings)
+        ['clone_id', 'cluster_id', 'source', 'enrichment_pvalue_zbinom']
+    ].merge(joint_embeddings)
     enriched_embeddings.to_parquet(
         f"{output_path}/{prefix}_enriched_embeddings_tcremp.parquet"
     )
@@ -311,5 +383,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # You still use mp elsewhere; ok to keep spawn.
     mp.set_start_method("spawn")
     main()

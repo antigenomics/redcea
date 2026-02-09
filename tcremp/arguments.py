@@ -183,6 +183,13 @@ def get_arguments_enrich():
     
     parser.add_argument('-lr', '--leiden-resolution', type=float, default=1.0,
                         help="Resolution parameter for Leiden clustering (default: 1.0)")
+        
+    parser.add_argument('--eps-estimation-based-on', type=str, default='sample',
+                        choices=['sample', 'background', 'all'],
+                        help="Basis for eps estimation in vDBSCAN: 'sample' uses only sample data, 'background' uses only background data, 'all' uses combined data (default: sample)")
 
-
+    parser.add_argument('--vdbscan-sym-rule', type=str, default='asymmetric', 
+                        choices=['asymmetric', 'min', 'max'],
+                        help="Symmetrization rule for vDBSCAN: 'asymmetric', 'min', or 'max' (default: asymmetric)")
+    
     return parser.parse_args()

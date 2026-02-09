@@ -12,7 +12,7 @@
 tcrempnet \
   --sample /projects/immunestatus/pogorelyy/airr_format/P1_15_F1.txt \
   --background /projects/immunestatus/pogorelyy/airr_format/P1_0_F1_with_1.txt \
-  --output /projects/immunestatus/pogorelyy/tcrempnet/P1_F1_test \
+  --output /projects/immunestatus/pogorelyy/tcrempnet/P1_F1_test_old \
   --chain TRB \
   --prefix yfv_P1_F1_with_1 \
   -np 48
