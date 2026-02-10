@@ -6,7 +6,8 @@ SCRIPT="compute_tcremp_grid_metrics.py"
 
 # ---- epitope-specific params ----
 EPITOPE="GLCTLVAML"
-PREFIX="trb_vdjdb_${EPITOPE}"
+CHAIN="trb"
+PREFIX="${CHAIN}_vdjdb_${EPITOPE}"
 REPRESENTATIONS="${BASE}/tcremp/${PREFIX}_tcremp_representations.tsv"
 
 # optional (если нужно)
@@ -17,10 +18,10 @@ OUTDIR="${BASE}/metrics_${EPITOPE}"
 mkdir -p "${OUTDIR}"
 
 declare -A ALGOS
-ALGOS["leiden"]="tcrempnet_${EPITOPE}_trb_leiden"
-ALGOS["hierarchical_leiden"]="tcrempnet_${EPITOPE}_trb_hierarchical_leiden"
-ALGOS["leiden_dbscan"]="tcrempnet_${EPITOPE}_trb_leiden_dbscan"
-ALGOS["vdbscan"]="tcrempnet_${EPITOPE}_trb_vdbscan"
+ALGOS["leiden"]="tcrempnet_${EPITOPE}_${CHAIN}_leiden"
+ALGOS["hierarchical_leiden"]="tcrempnet_${EPITOPE}_${CHAIN}_hierarchical_leiden"
+ALGOS["leiden_dbscan"]="tcrempnet_${EPITOPE}_${CHAIN}_leiden_dbscan"
+ALGOS["vdbscan"]="tcrempnet_${EPITOPE}_${CHAIN}_vdbscan"
 
 for ALGO in "${!ALGOS[@]}"; do
   ROOT="${BASE}/${ALGOS[$ALGO]}"
@@ -30,6 +31,7 @@ for ALGO in "${!ALGOS[@]}"; do
   echo "Running metrics for ALGO = ${ALGO}"
   echo "EPITOPE = ${EPITOPE}"
   echo "PREFIX  = ${PREFIX}"
+  echo "CHAIN   = ${CHAIN}"
   echo "ROOT    = ${ROOT}"
   echo "REPR    = ${REPRESENTATIONS}"
   echo "OUT     = ${OUT}"
@@ -47,7 +49,8 @@ for ALGO in "${!ALGOS[@]}"; do
     --validator_csv "${VALIDATOR_CSV}" \
     --epitope "${EPITOPE}" \
     --padj_thr "${PADJ_THR}" \
-    --out "${OUT}"
+    --out "${OUT}" \
+    --chain "${CHAIN}"
 done
 
 echo "✅ All metrics computed in: ${OUTDIR}"

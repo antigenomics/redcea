@@ -232,7 +232,7 @@ def main():
             knn_indices=indices,
             knn_distances=distances,
             resolution=args.leiden_resolution,
-            k_neighbors=args.k_neighbors,
+            k_neighbors=args.eps_k_neighbors,
             num_points_for_core=args.cluster_min_samples,
             n_jobs=args.nproc
         )
@@ -261,7 +261,7 @@ def main():
     elif args.cluster_algo == "vdbscan":
         cdr3_col = _pick_cdr3_col(joint_representations)
         eps_estimation_based_on = args.eps_estimation_based_on
-        kth_neighbor_for_eps = args.k_neighbors
+        kth_neighbor_for_eps = args.eps_k_neighbors
         
         if eps_estimation_based_on == "sample":
             logging.info("Running vDBSCAN (eps-by-group from SAMPLE only; L2 distances)")

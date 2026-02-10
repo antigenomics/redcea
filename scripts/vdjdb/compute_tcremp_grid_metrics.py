@@ -88,10 +88,50 @@ def parse_params_from_relpath(run_dir: Path, root: Path) -> dict:
 # -------------------------
 def trim_allele(series: pd.Series) -> pd.Series:
     # remove allele suffix like TRBV12-3*01 -> TRBV12-3
-    return series.astype(str).str.replace(r"\*.*$", "", regex=True)
+    # keep NaN as NaN
+    s = series.copy()
+    s = s.where(s.notna(), other=pd.NA)
+    return s.astype("string").str.replace(r"\*.*$", "", regex=True)
 
 
-def load_validator(validator_csv: Path, epitope: str, padj_thr: float) -> pd.DataFrame:
+def chain_spec(chain: str) -> dict:
+    """
+    Central mapping for alpha/beta column names.
+    - info TSV: produced by your pipeline (cdr3aa_*, v_*, j_*)
+    - validator CSV: TCRvdb columns (cdr3_*_aa, TR?V, TR?J)
+    """
+    chain = chain.lower()
+    if chain not in {"tra", "trb"}:
+        raise ValueError(f"Unsupported --chain: {chain}. Use tra or trb.")
+
+    if chain == "trb":
+        return {
+            "chain": "TRB",
+            "prefix_chain": "trb",
+            "info_cdr3_col": "cdr3aa_beta",
+            "info_v_col": "v_beta",
+            "info_j_col": "j_beta",
+            "val_cdr3_col": "cdr3_beta_aa",
+            "val_v_col": "TRBV",
+            "val_j_col": "TRBJ",
+        }
+
+    # TRA
+    return {
+        "chain": "TRA",
+        "prefix_chain": "tra",
+        "info_cdr3_col": "cdr3aa_alpha",
+        "info_v_col": "v_alpha",
+        "info_j_col": "j_alpha",
+        "val_cdr3_col": "cdr3_alpha_aa",
+        "val_v_col": "TRAV",
+        "val_j_col": "TRAJ",
+    }
+
+
+def load_validator(validator_csv: Path, epitope: str, padj_thr: float, chain: str) -> pd.DataFrame:
+    spec = chain_spec(chain)
+
     mm = (
         pd.read_csv(validator_csv)
         .drop(columns=["Unnamed: 0"], errors="ignore")
@@ -100,12 +140,21 @@ def load_validator(validator_csv: Path, epitope: str, padj_thr: float) -> pd.Dat
     mm = mm[mm["epitope_aa"] == epitope].copy()
     mm["valid"] = mm["padj"] < padj_thr
 
-    ylq_valid = (
-        mm[["cdr3_beta_aa", "TRBV", "TRBJ", "valid"]]
-        .groupby(["cdr3_beta_aa", "TRBV", "TRBJ"], as_index=False)
+    # Ensure needed columns exist
+    need = [spec["val_cdr3_col"], spec["val_v_col"], spec["val_j_col"], "valid"]
+    missing = [c for c in need if c not in mm.columns]
+    if missing:
+        raise KeyError(
+            f"Validator CSV missing columns for chain={chain}: {missing}. "
+            f"Available columns: {list(mm.columns)}"
+        )
+
+    out = (
+        mm[need]
+        .groupby([spec["val_cdr3_col"], spec["val_v_col"], spec["val_j_col"]], as_index=False)
         .any()
     )
-    return ylq_valid
+    return out
 
 
 def find_run_files(run_dir: Path, prefix: str, rep_path: Path):
@@ -115,7 +164,9 @@ def find_run_files(run_dir: Path, prefix: str, rep_path: Path):
     return None
 
 
-def compute_metrics_for_run(rep_path: Path, clonotypes_path: Path, ylq_valid: pd.DataFrame):
+def compute_metrics_for_run(rep_path: Path, clonotypes_path: Path, valid_df: pd.DataFrame, chain: str):
+    spec = chain_spec(chain)
+
     info = pd.read_csv(rep_path, sep="\t")
     clonotypes = pd.read_csv(clonotypes_path, sep="\t")
 
@@ -134,14 +185,23 @@ def compute_metrics_for_run(rep_path: Path, clonotypes_path: Path, ylq_valid: pd
         how="left",
     )
 
-    # prepare validator join keys
-    df["TRBV"] = trim_allele(df["v_beta"])
-    df["TRBJ"] = trim_allele(df["j_beta"])
-    df["cdr3_beta_aa"] = df["cdr3aa_beta"]
+    # Ensure needed info columns exist
+    need_info = [spec["info_cdr3_col"], spec["info_v_col"], spec["info_j_col"]]
+    missing_info = [c for c in need_info if c not in df.columns]
+    if missing_info:
+        raise KeyError(
+            f"Representations TSV missing columns for chain={chain}: {missing_info}. "
+            f"Available columns: {list(df.columns)}"
+        )
+
+    # prepare validator join keys (normalized alleles)
+    df[spec["val_v_col"]] = trim_allele(df[spec["info_v_col"]])
+    df[spec["val_j_col"]] = trim_allele(df[spec["info_j_col"]])
+    df[spec["val_cdr3_col"]] = df[spec["info_cdr3_col"]]
 
     df = df.merge(
-        ylq_valid,
-        on=["cdr3_beta_aa", "TRBV", "TRBJ"],
+        valid_df,
+        on=[spec["val_cdr3_col"], spec["val_v_col"], spec["val_j_col"]],
         how="left",
     )
 
@@ -165,12 +225,24 @@ def compute_metrics_for_run(rep_path: Path, clonotypes_path: Path, ylq_valid: pd
     f1 = float(f1_score(y_true, y_pred, zero_division=0))
 
     return {
+        "chain": spec["chain"],
         "TP": TP, "FP": FP, "TN": TN, "FN": FN,
         "precision": precision, "recall": recall, "f1": f1,
         "n_eval": int(len(df_cm)),
         "n_total": int(len(df)),
         "n_clustered": int(df["is_clustered"].sum()),
     }
+
+
+def default_prefix(chain: str, epitope: str) -> str:
+    spec = chain_spec(chain)
+    return f"{spec['prefix_chain']}_vdjdb_{epitope}"
+
+
+def default_representations_tsv(chain: str, epitope: str) -> str:
+    # keeps your previous convention: /projects/.../tcremp/{prefix}_tcremp_representations.tsv
+    pref = default_prefix(chain, epitope)
+    return f"/projects/immunestatus/vdjdb/tcremp/{pref}_tcremp_representations.tsv"
 
 
 # -------------------------
@@ -183,12 +255,19 @@ def main():
     ap.add_argument(
         "--root",
         required=True,
-        help="E.g. /projects/immunestatus/vdjdb/tcrempnet_YLQPRTFLL_trb_vdbscan",
+        help="Grid root dir with run subfolders.",
+    )
+    ap.add_argument(
+        "--chain",
+        default="trb",
+        choices=["tra", "trb"],
+        help="TCR chain to evaluate (tra or trb).",
     )
     ap.add_argument(
         "--prefix",
-        default="trb_vdjdb_YLQPRTFLL",
-        help="File prefix used in run outputs (same as in render_plots.py).",
+        default=None,
+        help="File prefix used in run outputs (same as in render_plots.py). "
+             "If not provided, inferred as '{tra|trb}_vdjdb_{epitope}'.",
     )
     ap.add_argument(
         "--validator_csv",
@@ -204,8 +283,9 @@ def main():
     )
     ap.add_argument(
         "--representations_tsv",
-        default="/projects/immunestatus/vdjdb/tcremp/trb_vdjdb_YLQPRTFLL_tcremp_representations.tsv",
-        help="GLOBAL representations TSV (same for all runs).",
+        default=None,
+        help="GLOBAL representations TSV (same for all runs). "
+             "If not provided, inferred from chain+epitope under /projects/immunestatus/vdjdb/tcremp/.",
     )
     args = ap.parse_args()
 
@@ -213,28 +293,35 @@ def main():
     if not root.exists():
         raise FileNotFoundError(f"--root does not exist: {root}")
 
-    ylq_valid = load_validator(Path(args.validator_csv), args.epitope, args.padj_thr)
+    # Fill defaults that depend on chain/epitope
+    if args.prefix is None:
+        args.prefix = default_prefix(args.chain, args.epitope)
+    if args.representations_tsv is None:
+        args.representations_tsv = default_representations_tsv(args.chain, args.epitope)
+
+    valid_df = load_validator(Path(args.validator_csv), args.epitope, args.padj_thr, args.chain)
 
     rows = []
+    rep_path = Path(args.representations_tsv)
 
     # walk all dirs and pick those that contain both required files
     for run_dir in sorted([p for p in root.rglob("*") if p.is_dir()]):
         print(f"Processing: {run_dir}")
-        rep_path = Path(args.representations_tsv)
         found = find_run_files(run_dir, args.prefix, rep_path)
         if not found:
             print(f"  Skipping (missing files): {run_dir}")
             continue
 
-        rep_path, clonotypes_path = found
+        rep_path_found, clonotypes_path = found
         parsed = parse_params_from_relpath(run_dir, root)
 
-        m = compute_metrics_for_run(rep_path, clonotypes_path, ylq_valid)
+        m = compute_metrics_for_run(rep_path_found, clonotypes_path, valid_df, args.chain)
         if m is None:
             rows.append({
                 "run_dir": str(run_dir),
                 "status": "no_valid_labels",
                 **parsed,
+                "chain": args.chain,
             })
             continue
 
@@ -258,7 +345,12 @@ def main():
     # quick top-10 preview
     if "f1" in out_df.columns:
         print("\nTop-10 by F1:")
-        cols = [c for c in ["relpath", "kn", "ms", "eps_mode", "eps", "TP", "FP", "TN", "FN", "precision", "recall", "f1"] if c in out_df.columns]
+        cols = [
+            c for c in [
+                "chain", "relpath", "kn", "ms", "eps_mode", "eps",
+                "TP", "FP", "TN", "FN", "precision", "recall", "f1"
+            ] if c in out_df.columns
+        ]
         print(out_df[out_df["status"] == "ok"][cols].head(10).to_string(index=False))
 
 

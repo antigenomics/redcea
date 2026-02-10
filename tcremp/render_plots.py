@@ -42,7 +42,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 base_dir = f'/projects/immunestatus/vdjdb/{args.run_dir}'
-out_html = f"{args.run_dir}.html"
+out_html = f"{args.run_dir.replace('/', '_')}.html"
 
 print(f"Running report for: {base_dir}")
 print(f"Output: {out_html}")
@@ -162,7 +162,7 @@ fig_scatter = px.scatter(
     y="y",
     color="cluster",
     color_discrete_map={"unclustered": "lightgrey"},
-    hover_data=["cdr3aa_beta", "v_beta", "j_beta"],
+    hover_data=["cdr3aa_beta", "v_beta", "j_beta", 'valid'],
 )
 
 fig_scatter.update_layout(

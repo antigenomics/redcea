@@ -164,6 +164,9 @@ def get_arguments_enrich():
                         help="min_samples parameter for DBSCAN used in clonotype clustering (default: 3)")
 
     parser.add_argument('-kn', "--k-neighbors", type=int, default=4,
+                        help="k neighbors for KNN graph evaluation (default: 4)")
+    
+    parser.add_argument('-ekn', "--eps-k-neighbors", type=int, default=4,
                         help="k-th neighbor parameter for Knee estimation (default: 4)")
 
     parser.add_argument('-se', '--sample-embedding', type=str,
