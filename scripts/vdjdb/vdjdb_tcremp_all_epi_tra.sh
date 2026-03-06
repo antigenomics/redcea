@@ -1,19 +1,17 @@
 #!/bin/bash
 
 # Путь к общим файлам
-AIRR_DIR="/projects/immunestatus/vdjdb/airr_format"
-EMB_DIR="/projects/immunestatus/vdjdb/tcremp"
+AIRR_DIR="/projects/immunestatus/vdjdb_olga/airr_format"
+EMB_DIR="/projects/immunestatus/vdjdb_olga/tcremp"
 
-# Список сэмплов
-samples=(
-tra_vdjdb_uni_AVFDRKSDAK tra_vdjdb_uni_ELAGIGILTV tra_vdjdb_uni_GILGFVFTL 
-tra_vdjdb_uni_GLCTLVAML tra_vdjdb_uni_NLVPMVATV tra_vdjdb_uni_RAKFKQLL 
-tra_vdjdb_uni_SLLMWITQV tra_vdjdb_uni_YLQPRTFLL tra_vdjdb_uni_YVLDHLIVV
-)
+mkdir -p logs_tcremp
 
-# Запуск цикла сабмита задач
-for sample in "${samples[@]}"; do
-  SAMPLE_FILE="$AIRR_DIR/${sample}.tsv"
+files=("$AIRR_DIR"/tra*.tsv)
+
+# Проходим по всем tsv файлам
+for SAMPLE_FILE in "${files[@]}"; do
+
+  sample=$(basename "$SAMPLE_FILE" .tsv)
 
   sbatch <<EOF
 #!/bin/bash

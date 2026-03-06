@@ -39,19 +39,27 @@ parser.add_argument(
     "run_dir",
     help="tcrempnet run directory, e.g. tcrempnet_YLQPRTFLL_trb_leiden_100k_res100",
 )
+parser.add_argument(
+    "--epitope",
+    required=True,
+    help="Epitope amino-acid sequence, e.g. YLQPRTFLL",
+)
 args = parser.parse_args()
 
-base_dir = f'/projects/immunestatus/vdjdb/{args.run_dir}'
+epitope = args.epitope.strip()
+
+base_dir = f"/projects/immunestatus/vdjdb/{args.run_dir}"
 out_html = f"{args.run_dir.replace('/', '_')}.html"
 
 print(f"Running report for: {base_dir}")
+print(f"Epitope: {epitope}")
 print(f"Output: {out_html}")
 
 
 # =========================
 # LOAD DATA (copied from notebook)
 # =========================
-prefix = "trb_vdjdb_YLQPRTFLL"
+prefix = f"trb_vdjdb_{epitope}"
 
 embeding_sample = pd.read_parquet(
     f"{base_dir}/{prefix}_enriched_embeddings_tcremp.parquet"
@@ -59,7 +67,7 @@ embeding_sample = pd.read_parquet(
 
 clonotypes = pd.read_csv(
     f"{base_dir}/{prefix}_enriched_clonotypes_tcremp.tsv",
-    sep="\t"
+    sep="\t",
 )
 
 clonotypes_sample = clonotypes[clonotypes.source == "sample"].copy()
@@ -68,7 +76,7 @@ clonotypes_sample["clone_id"] = clonotypes_sample["clone_id"].apply(
 )
 
 initial_emb = pd.read_parquet(
-    "/projects/immunestatus/vdjdb/tcremp/trb_vdjdb_YLQPRTFLL_embeddings.parquet"
+    f"/projects/immunestatus/vdjdb/tcremp/{prefix}_embeddings.parquet"
 )
 
 scaler = StandardScaler()
@@ -81,8 +89,8 @@ initial_emb_pca = pca.fit_transform(
 initial_emb_umap = umap.fit_transform(initial_emb_pca)
 
 info = pd.read_csv(
-    "/projects/immunestatus/vdjdb/tcremp/trb_vdjdb_YLQPRTFLL_tcremp_representations.tsv",
-    sep="\t"
+    f"/projects/immunestatus/vdjdb/tcremp/{prefix}_tcremp_representations.tsv",
+    sep="\t",
 )
 
 info["x"] = initial_emb_umap[:, 0]
@@ -90,14 +98,14 @@ info["y"] = initial_emb_umap[:, 1]
 
 info = info.merge(
     clonotypes_sample[["clone_id", "cluster_id"]],
-    how="left"
+    how="left",
 )
 
 bg = pd.read_parquet(
     "/projects/immunestatus/vdjdb/tcremp/trb_background_embeddings_10000.parquet"
 )
 
-sampled_bg = bg.copy() # ! change if you want
+sampled_bg = bg.copy()  # ! change if you want
 
 bg_pca = pca.fit_transform(
     scaler.fit_transform(sampled_bg)
@@ -114,7 +122,7 @@ info["y"] = initial_emb_umap[:, 1]
 
 info = info.merge(
     clonotypes_sample[["clone_id", "cluster_id"]],
-    how="left"
+    how="left",
 )
 
 matchmakers = (
@@ -124,7 +132,7 @@ matchmakers = (
 )
 
 matchmakers["valid"] = matchmakers.padj < 1e-5
-matchmakers = matchmakers[matchmakers["epitope_aa"] == "YLQPRTFLL"]
+matchmakers = matchmakers[matchmakers["epitope_aa"] == epitope]
 
 ylq_valid = (
     matchmakers[["cdr3_beta_aa", "TRBV", "TRBJ", "valid"]]
@@ -162,11 +170,11 @@ fig_scatter = px.scatter(
     y="y",
     color="cluster",
     color_discrete_map={"unclustered": "lightgrey"},
-    hover_data=["cdr3aa_beta", "v_beta", "j_beta", 'valid'],
+    hover_data=["cdr3aa_beta", "v_beta", "j_beta", "valid"],
 )
 
 fig_scatter.update_layout(
-    title="TCR clustering",
+    title=f"TCR clustering ({epitope})",
     width=1000,
     height=700,
     template="plotly_white",
@@ -197,7 +205,7 @@ for tr in fig_scatter.data:
     fig_bg.add_trace(tr)
 
 fig_bg.update_layout(
-    title="TCR clustering with background density",
+    title=f"TCR clustering with background density ({epitope})",
     width=1000,
     height=700,
     template="plotly_white",
@@ -227,7 +235,7 @@ ax.set_xticklabels(["Pred True", "Pred False"])
 ax.set_yticklabels(["GT True", "GT False"])
 
 ax.set_title(
-    f"Precision={precision:.2f}, Recall={recall:.2f}, F1={f1:.2f}"
+    f"{epitope}\nPrecision={precision:.2f}, Recall={recall:.2f}, F1={f1:.2f}"
 )
 
 for i in range(2):

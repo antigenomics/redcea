@@ -1,19 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=tcrempnet_GLC_grid
+#SBATCH --job-name=tcrempnet_GLC_grid_tra
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256gb
 #SBATCH --time=2:00:00
 #SBATCH --constraint=hpc
 #SBATCH --partition=short
 #SBATCH --array=0-147
-#SBATCH --output=/projects/immunestatus/vdjdb/tcrempnet_logs/%x_%A_%a.log
+#SBATCH --output=/projects/immunestatus/vdjdb/tcrempnet_logs_tra/%x_%A_%a.log
 
 set -euo pipefail
 
 # =========================
 # Global status log (single file for whole grid)
 # =========================
-STATUS_LOG="/projects/immunestatus/vdjdb/tcrempnet_logs/grid_status.log"
+STATUS_LOG="/projects/immunestatus/vdjdb/tcrempnet_logs_tra/grid_status.log"
 LOCKFILE="${STATUS_LOG}.lock"
 mkdir -p "$(dirname "${STATUS_LOG}")"
 touch "${STATUS_LOG}"
@@ -43,17 +43,17 @@ trap on_exit EXIT
 # =========================
 # Fixed inputs (your paths)
 # =========================
-SAMPLE="/projects/immunestatus/vdjdb/airr_format/trb_vdjdb_GLCTLVAML.tsv"
-BACKGROUND="/projects/immunestatus/vdjdb/airr_format/trb_background.tsv"
-SAMPLE_EMB="/projects/immunestatus/vdjdb/tcremp/trb_vdjdb_GLCTLVAML_embeddings.parquet"
-BG_EMB="/projects/immunestatus/vdjdb/tcremp/trb_background_embeddings.parquet"
+SAMPLE="/projects/immunestatus/vdjdb/airr_format/tra_vdjdb_GLCTLVAML.tsv"
+BACKGROUND="/projects/immunestatus/vdjdb/airr_format/tra_background.tsv"
+SAMPLE_EMB="/projects/immunestatus/vdjdb/tcremp/tra_vdjdb_GLCTLVAML_embeddings.parquet"
+BG_EMB="/projects/immunestatus/vdjdb/tcremp/tra_background_embeddings.parquet"
 
-CHAIN="TRB"
+CHAIN="TRA"
 NPROC=16
 N_BG_POINTS=100000
 
 # Your old output base name as prefix for all runs
-BASE_OUT_PREFIX="/projects/immunestatus/vdjdb/tcrempnet_GLCTLVAML_trb"
+BASE_OUT_PREFIX="/projects/immunestatus/vdjdb/tcrempnet_GLCTLVAML_tra"
 
 # =========================
 # Pick config by array id

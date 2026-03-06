@@ -1,11 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-BASE="/projects/immunestatus/vdjdb"
+BASE="/projects/immunestatus/vdjdb_valid"
 SCRIPT="compute_tcremp_grid_metrics_paired.py"   # <-- новый python-скрипт (paired TRA+TRB, без matching id)
 
 # ---- epitope-specific params ----
-EPITOPE="YLQPRTFLL"
+EPITOPE="GLCTLVAML"  # <-- эпитоп для анализа (можешь менять на другой, если нужно)
 
 # prefixes + global representations per chain
 PREFIX_TRA="tra_vdjdb_${EPITOPE}"

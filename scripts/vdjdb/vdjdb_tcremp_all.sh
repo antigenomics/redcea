@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Путь к общим файлам
-AIRR_DIR="/projects/immunestatus/vdjdb/airr_format"
-EMB_DIR="/projects/immunestatus/vdjdb/tcremp"
+AIRR_DIR="/projects/immunestatus/vdjdb_valid/airr_format"
+EMB_DIR="/projects/immunestatus/vdjdb_valid/tcremp"
 
 # Список сэмплов
 samples=(
@@ -18,7 +18,7 @@ for sample in "${samples[@]}"; do
 #SBATCH --job-name=tcremp_${sample}
 #SBATCH --cpus-per-task=100
 #SBATCH --mem=256gb
-#SBATCH --time=08:00:00
+#SBATCH --time=01:00:00
 #SBATCH --output=logs_tcremp/${sample}.%j.log
 #SBATCH --constraint=hpc
 #SBATCH --partition=medium
