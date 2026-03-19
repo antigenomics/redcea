@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 
 from mir.common.segments import SegmentLibrary
-
 try:
     from tcremp.arguments import get_arguments_vdjdb_clusters
     from tcremp.utils import configure_logging, prepare_output_path
@@ -36,6 +35,9 @@ def build_airr_from_epitope(ep_df: pd.DataFrame, chain: str) -> pd.DataFrame:
     out = ep_df[[cfg['cdr3'], cfg['v'], cfg['j']]].copy()
     out.columns = ['junction_aa', 'v_call', 'j_call']
     out['locus'] = cfg['locus']
+    logging.info('Built AIRR table with %d rows for chain %s', len(out), chain)
+    out.dropna(subset=['junction_aa'], inplace=True)
+    logging.info('After dropping rows with missing CDR3, %d rows remain', len(out))
     return out.reset_index(drop=True)
 
 
