@@ -25,8 +25,8 @@ except ImportError:
 
 
 CHAIN_COLS = {
-    'TRA': {'cdr3': 'cdr3.alpha', 'v': 'v.alpha', 'j': 'j.alpha', 'locus': 'TRA', 'gene': 'alpha'},
-    'TRB': {'cdr3': 'cdr3.beta', 'v': 'v.beta', 'j': 'j.beta', 'locus': 'TRB', 'gene': 'beta'},
+    'TRA': {'cdr3': 'cdr3.alpha', 'v': 'v.alpha', 'j': 'j.alpha', 'locus': 'alpha', 'gene': 'alpha'},
+    'TRB': {'cdr3': 'cdr3.beta', 'v': 'v.beta', 'j': 'j.beta', 'locus': 'beta', 'gene': 'beta'},
 }
 
 
@@ -123,7 +123,7 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
     airr_path = airr_dir / f"{prefix}.tsv"
     sample_emb_path = tcremp_dir / f"{prefix}_sample_embeddings.parquet"
 
-    logging.info('Processing epitope %s', epitope)
+    logging.info(f'Processing epitope {epitope} with {len(ep_df)} clonotypes')
     build_airr_from_epitope(ep_df, chain).to_csv(airr_path, sep='\t', index=False)
 
     args.sample = str(airr_path.resolve())
