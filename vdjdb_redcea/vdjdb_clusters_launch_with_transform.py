@@ -25,8 +25,8 @@ except ImportError:
 
 
 CHAIN_COLS = {
-    'TRA': {'cdr3': 'cdr3.alpha', 'v': 'v.alpha', 'j': 'j.alpha', 'locus': 'TRA', 'gene': 'alpha'},
-    'TRB': {'cdr3': 'cdr3.beta', 'v': 'v.beta', 'j': 'j.beta', 'locus': 'TRB', 'gene': 'beta'},
+    'TRA': {'cdr3': 'cdr3.alpha', 'v': 'v.alpha', 'j': 'j.alpha', 'locus': 'alpha', 'gene': 'alpha'},
+    'TRB': {'cdr3': 'cdr3.beta', 'v': 'v.beta', 'j': 'j.beta', 'locus': 'beta', 'gene': 'beta'},
 }
 
 
