@@ -23,7 +23,7 @@ def run_tcremp_embedding(analysis_rep, proto_rep, segment_library, chain, metric
     logging.info(f'Started embeddings calculation')
     embedder = PrototypeEmbedding(proto_rep, aligner=aligner, metrics=Metrics(metrics))
     t0 = time.time()
-    emb = embedder.embed_repertoire(analysis_rep, threads=nproc, flatten_scores=True)
+    emb = embedder.embed_repertoire(analysis_rep, threads=min(nproc, len(analysis_rep.clonotypes)), flatten_scores=True)
     logging.info(f'Embeddings done in {time.time() - t0:.2f}s')
     log_memory_usage('after embeddings done')
     columns = []
