@@ -94,6 +94,8 @@ def add_vdjdb_cluster_args(parser: argparse.ArgumentParser) -> argparse.Argument
                         help='Path to background AIRR file.')
     parser.add_argument('--epitopes', nargs='*', default=None,
                         help='Optional list of epitopes to process. By default all epitopes are processed.')
+    parser.add_argument('--min-epitope-clonotypes', type=int, default=None,
+                        help='Optional minimum number of clonotypes required for an epitope to be processed.')
     return parser
 
 

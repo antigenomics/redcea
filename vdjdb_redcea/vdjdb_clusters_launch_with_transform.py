@@ -223,6 +223,17 @@ def main():
     vdjdb_df = pd.read_csv(args.vdjdb, sep='\t')
     if args.epitopes is not None:
         vdjdb_df = vdjdb_df[vdjdb_df['antigen.epitope'].isin(args.epitopes)].copy()
+    if args.min_epitope_clonotypes is not None:
+        epitope_sizes = vdjdb_df.groupby('antigen.epitope').size()
+        eligible_epitopes = epitope_sizes[epitope_sizes >= args.min_epitope_clonotypes].index
+        skipped_epitopes = int((epitope_sizes < args.min_epitope_clonotypes).sum())
+        vdjdb_df = vdjdb_df[vdjdb_df['antigen.epitope'].isin(eligible_epitopes)].copy()
+        logging.info(
+            'Filtered epitopes by minimum clonotype count >= %d: kept %d epitopes, skipped %d',
+            args.min_epitope_clonotypes,
+            len(eligible_epitopes),
+            skipped_epitopes,
+        )
 
     args.background = str(Path(args.background_airr).resolve())
     args.output = str(output_root)

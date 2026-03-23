@@ -13,6 +13,9 @@ import pandas as pd
 import faiss
 
 
+_FAISS_INDEX_CACHE: dict[tuple[str, float, int], faiss.Index] = {}
+
+
 # ---------------- Strict helpers (no silent fixes) ----------------
 
 def _require_finite(name: str, X: np.ndarray) -> None:
@@ -88,12 +91,33 @@ def _knn_files(prefix: Path) -> Tuple[Path, Path, Path]:
 
 # ---------------- FAISS index build/load ----------------
 
+def _index_cache_key(index_path: Path) -> tuple[str, float, int]:
+    stat = index_path.stat()
+    return (str(index_path.resolve()), stat.st_mtime, stat.st_size)
+
+
+def _get_cached_index(index_path: Path) -> faiss.Index | None:
+    if not index_path.exists():
+        return None
+    return _FAISS_INDEX_CACHE.get(_index_cache_key(index_path))
+
+
+def _put_cached_index(index_path: Path, index: faiss.Index) -> faiss.Index:
+    if index_path.exists():
+        _FAISS_INDEX_CACHE[_index_cache_key(index_path)] = index
+    return index
+
+
 def _build_or_load_index(data: np.ndarray, index_path: Path, rebuild: bool, nproc: int) -> faiss.Index:
     faiss.omp_set_num_threads(int(nproc))
 
     if (not rebuild) and index_path.exists():
+        cached = _get_cached_index(index_path)
+        if cached is not None:
+            logging.info("Reusing cached FAISS index: %s", index_path)
+            return cached
         logging.info("Loading FAISS index: %s", index_path)
-        return faiss.read_index(str(index_path))
+        return _put_cached_index(index_path, faiss.read_index(str(index_path)))
 
     logging.info("Building FAISS IndexFlatL2: %s (rebuild=%s)", index_path, rebuild)
     n, d = data.shape
@@ -102,7 +126,7 @@ def _build_or_load_index(data: np.ndarray, index_path: Path, rebuild: bool, npro
     tmp = index_path.with_suffix(index_path.suffix + ".tmp")
     faiss.write_index(idx, str(tmp))
     os.replace(tmp, index_path)
-    return idx
+    return _put_cached_index(index_path, idx)
 
 
 # ---------------- self-kNN cache ----------------
@@ -190,8 +214,10 @@ def _compute_cross_knn_l2(
     rebuild_db_index: bool,
     k: int,
     nproc: int,
+    db_index: faiss.Index | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    db_index = _build_or_load_index(db, index_path=db_index_path, rebuild=rebuild_db_index, nproc=nproc)
+    if db_index is None:
+        db_index = _build_or_load_index(db, index_path=db_index_path, rebuild=rebuild_db_index, nproc=nproc)
     faiss.omp_set_num_threads(int(nproc))
     t0 = time.time()
     dist_sq, ind = db_index.search(query, int(k))
@@ -299,6 +325,8 @@ def compute_split_knn(
     # default prefixes for cached self-kNN
     sample_self_prefix = paths.sample_self_prefix if paths is not None else None
     bg_self_prefix = paths.bg_self_prefix if paths is not None else None
+    sample_index = None
+    bg_index = None
 
     # apply trunc namespace to bg-related caches/index
     if truncN is not None:
@@ -354,6 +382,7 @@ def compute_split_knn(
         rebuild_db_index=rebuild_bg,
         k=k_neighbors,
         nproc=nproc,
+        db_index=bg_index,
     )
 
     dist_bs, ind_bs = _compute_cross_knn_l2(
@@ -363,6 +392,7 @@ def compute_split_knn(
         rebuild_db_index=rebuild_sample,
         k=k_neighbors,
         nproc=nproc,
+        db_index=sample_index,
     )
 
     return dist_ss, ind_ss, dist_bb, ind_bb, dist_sb, ind_sb, dist_bs, ind_bs
