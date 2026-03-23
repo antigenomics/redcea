@@ -71,13 +71,20 @@ def compute_embeddings_if_needed(path, args, is_sample, proto, chain, lib, locus
     logging.info(f"Computing {tag} embeddings...")
 
     rep = load_analysis_repertoire(path, lib, locus, args.index_col, args.lower_len_cdr3, args.higher_len_cdr3)
+    logging.info("Loaded %s repertoire with %d clonotypes after parsing/length filtering", tag, len(rep.clonotypes))
 
     # OPTIONAL deterministic truncation for bg
     if (not is_sample) and getattr(args, "n_bg_points", None):
         logging.info(f"Restricting background repertoire to first {args.n_bg_points} clonotypes (pre-embedding)")
         rep = rep.sample_n(args.n_bg_points, sample_random=False)
 
-    rep = subsample_repertoire(rep, args.n_clonotypes, args.sample_random_prototypes, args.random_seed)
+    rep = subsample_repertoire(rep, args.n_clonotypes, args.sample_random_clonotypes, args.random_seed)
+    logging.info("Prepared %s repertoire with %d clonotypes before embedding", tag, len(rep.clonotypes))
+    if len(rep.clonotypes) == 0:
+        raise ValueError(
+            f"{tag.capitalize()} repertoire is empty after filtering/subsampling: {path}. "
+            "Check AIRR conversion, chain selection, and CDR3 length thresholds."
+        )
     run_tcremp_embedding(rep, proto, lib, chain, args.metrics, args.nproc, emb_path)
     return emb_path
 
@@ -100,7 +107,7 @@ def load_embeddings(path, args, is_sample, lib, locus, prefix, output_path):
     if (not is_sample) and getattr(args, "n_bg_points", None):
         rep = rep.sample_n(args.n_bg_points, sample_random=False)
 
-    rep = subsample_repertoire(rep, args.n_clonotypes, args.sample_random_prototypes, args.random_seed)
+    rep = subsample_repertoire(rep, args.n_clonotypes, args.sample_random_clonotypes, args.random_seed)
 
     rep_df = get_representations_df(rep, locus)
     rep_df['clone_id'] = prefix_tag + rep_df['clone_id'].astype(str)

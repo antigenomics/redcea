@@ -18,12 +18,36 @@ from mir.embedding.prototype_embedding import PrototypeEmbedding, Metrics
 from mir.distances.aligner import ClonotypeAligner
 
 
+def _safe_embedding_threads(nproc, n_clonotypes, min_batch_size=32):
+    if n_clonotypes <= 0:
+        return 0
+    if nproc is None:
+        nproc = 1
+    # `mir` multiprocessing may generate empty batches on small inputs.
+    # Keep workers conservative so each process gets a non-trivial chunk.
+    by_batch = max(1, n_clonotypes // max(1, int(min_batch_size)))
+    return max(1, min(int(nproc), int(n_clonotypes), by_batch))
+
+
 def run_tcremp_embedding(analysis_rep, proto_rep, segment_library, chain, metrics, nproc, filename, save_dists=True):
     aligner = ClonotypeAligner.from_library(lib=segment_library)
     logging.info(f'Started embeddings calculation')
     embedder = PrototypeEmbedding(proto_rep, aligner=aligner, metrics=Metrics(metrics))
+    n_clonotypes = len(analysis_rep.clonotypes)
+    if n_clonotypes == 0:
+        raise ValueError(
+            'Cannot compute embeddings for an empty repertoire. '
+            'All clonotypes were filtered out before embedding.'
+        )
+    threads = _safe_embedding_threads(nproc, n_clonotypes)
+    logging.info(
+        'Embedding repertoire with %d clonotypes using %d worker(s) (requested nproc=%s)',
+        n_clonotypes,
+        threads,
+        nproc,
+    )
     t0 = time.time()
-    emb = embedder.embed_repertoire(analysis_rep, threads=min(nproc, len(analysis_rep.clonotypes)), flatten_scores=True)
+    emb = embedder.embed_repertoire(analysis_rep, threads=threads, flatten_scores=True)
     logging.info(f'Embeddings done in {time.time() - t0:.2f}s')
     log_memory_usage('after embeddings done')
     columns = []
@@ -63,7 +87,7 @@ def main():
     proto = load_prototype_repertoire(proto_path, lib, locus, args.index_col)
     logging.info(f'Proto repertoire: {rep}')
 
-    rep = subsample_repertoire(rep, args.n_clonotypes, args.sample_random_prototypes, args.random_seed)
+    rep = subsample_repertoire(rep, args.n_clonotypes, args.sample_random_clonotypes, args.random_seed)
     proto = subsample_repertoire(proto, args.n_prototypes, args.sample_random_clonotypes, args.random_seed)
     rep.serialize().to_csv(f'{output_path}/{prefix}_rep.tsv', sep='\t')
     logging.info(f'Finished subsampling')
