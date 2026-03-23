@@ -8,6 +8,8 @@ from pathlib import Path
 import faiss
 import numpy as np
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 
 from mir.common.segments import SegmentLibrary
 from tcremp.utils import load_prototype_repertoire, resolve_prototype_file, subsample_repertoire
@@ -30,6 +32,7 @@ CHAIN_COLS = {
     'TRA': {'cdr3': 'cdr3.alpha', 'v': 'v.alpha', 'j': 'j.alpha', 'locus': 'alpha', 'gene': 'alpha'},
     'TRB': {'cdr3': 'cdr3.beta', 'v': 'v.beta', 'j': 'j.beta', 'locus': 'beta', 'gene': 'beta'},
 }
+DEFAULT_PLOT_BG_POINTS = 20_000
 
 
 def build_airr_from_epitope(ep_df: pd.DataFrame, chain: str) -> pd.DataFrame:
@@ -126,9 +129,115 @@ def load_or_fit_background_transform(*, args, output_root: Path, bg_emb: pd.Data
     return transform
 
 
+def prepare_background_umap(transform: BackgroundTransform, bg_pca: np.ndarray, n_bg_points: int) -> np.ndarray:
+    bg_pca_subset = np.asarray(bg_pca[:n_bg_points], dtype=np.float32)
+    if bg_pca_subset.size == 0:
+        raise ValueError('Cannot prepare background UMAP for empty background PCA array')
+
+    if transform.umap_model is None:
+        logging.info('Fitting UMAP for plotting on first %d background clonotypes', len(bg_pca_subset))
+        return transform.fit_umap(bg_pca_subset)
+
+    if transform.background_umap_ is not None and len(transform.background_umap_) >= len(bg_pca_subset):
+        return np.asarray(transform.background_umap_[:len(bg_pca_subset)], dtype=np.float32)
+
+    logging.info('Using existing UMAP model to transform first %d background clonotypes for plotting', len(bg_pca_subset))
+    return transform.transform_umap(bg_pca_subset)
+
+
+def build_cluster_plot(
+    *,
+    epitope: str,
+    chain: str,
+    sample_reps: pd.DataFrame,
+    sample_ids: pd.Series,
+    sample_labels: np.ndarray,
+    sample_umap: np.ndarray,
+    bg_umap: np.ndarray,
+) -> go.Figure:
+    cfg = CHAIN_COLS[chain]
+    sample_df = sample_reps.copy().reset_index(drop=True)
+    sample_df['clone_id'] = sample_ids.to_numpy()
+    sample_df['cluster_id'] = sample_labels
+    sample_df['x'] = sample_umap[:, 0]
+    sample_df['y'] = sample_umap[:, 1]
+    sample_df['cluster'] = np.where(sample_df['cluster_id'] == -1, 'unclustered', sample_df['cluster_id'].astype(str))
+
+    hover_cols = [
+        col for col in (
+            f"cdr3aa_{cfg['gene']}",
+            f"v_{cfg['gene']}",
+            f"j_{cfg['gene']}",
+            'clone_id',
+            'cluster_id',
+        )
+        if col in sample_df.columns
+    ]
+
+    fig_scatter = px.scatter(
+        sample_df,
+        x='x',
+        y='y',
+        color='cluster',
+        color_discrete_map={'unclustered': 'lightgrey'},
+        hover_data=hover_cols,
+    )
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Histogram2dContour(
+            x=bg_umap[:, 0],
+            y=bg_umap[:, 1],
+            ncontours=20,
+            contours=dict(coloring='fill', showlines=False),
+            colorscale='Greys',
+            showscale=False,
+            hoverinfo='skip',
+            opacity=0.35,
+        )
+    )
+    for trace in fig_scatter.data:
+        fig.add_trace(trace)
+
+    fig.update_layout(
+        title=f'TCR clustering with background density ({epitope})',
+        width=1000,
+        height=700,
+        template='plotly_white',
+    )
+    return fig
+
+
+def save_cluster_plot_html(
+    *,
+    epitope: str,
+    chain: str,
+    sample_reps: pd.DataFrame,
+    sample_ids: pd.Series,
+    sample_pca: np.ndarray,
+    sample_labels: np.ndarray,
+    bg_umap: np.ndarray,
+    transform: BackgroundTransform,
+    output_path: Path,
+) -> None:
+    sample_umap = transform.transform_umap(sample_pca)
+    fig = build_cluster_plot(
+        epitope=epitope,
+        chain=chain,
+        sample_reps=sample_reps,
+        sample_ids=sample_ids,
+        sample_labels=sample_labels,
+        sample_umap=sample_umap,
+        bg_umap=bg_umap,
+    )
+    output_path.write_text(fig.to_html(full_html=True, include_plotlyjs='cdn'), encoding='utf-8')
+    logging.info('Saved cluster plot HTML to %s', output_path)
+
+
 def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str], locus: str, lib: SegmentLibrary,
                     proto, airr_dir: Path, tcremp_dir: Path, tcrempnet_dir: Path,
                     bg_pca: np.ndarray, bg_reps: pd.DataFrame, bg_ids: pd.Series, bg_index_path: Path,
+                    bg_umap: np.ndarray,
                     transform: BackgroundTransform) -> tuple[pd.DataFrame, pd.DataFrame]:
     chain = args.chain
     prefix = f"{chain.lower()}_vdjdb_{epitope}"
@@ -194,6 +303,19 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
 
     cluster_members_df = build_sample_members_table(sample_cluster_df, summary_df, chain, ep_df, epitope)
     cluster_members_df.to_csv(tcrempnet_dir / f"{prefix}_cluster_members.tsv", sep='\t', index=False)
+
+    sample_labels = np.asarray(labels[:len(sample_ids)], dtype=np.int32)
+    save_cluster_plot_html(
+        epitope=epitope,
+        chain=chain,
+        sample_reps=sample_reps,
+        sample_ids=sample_ids,
+        sample_pca=sample_pca,
+        sample_labels=sample_labels,
+        bg_umap=bg_umap,
+        transform=transform,
+        output_path=tcrempnet_dir / f"{prefix}_clusters.html",
+    )
 
     logging.info('Done %s: sample=%d, clustered_sample=%d, clusters=%d',
                  epitope, len(sample_reps), len(sample_cluster_df), summary_df.shape[0])
@@ -261,6 +383,8 @@ def main():
     bg_pca = transform.background_pca_
     if bg_pca is None:
         bg_pca = transform.transform_pca(bg_emb)
+    plot_bg_points = min(len(bg_pca), args.n_bg_points or DEFAULT_PLOT_BG_POINTS)
+    bg_umap = prepare_background_umap(transform, bg_pca, plot_bg_points)
 
     clustered_tables = []
     cluster_members_tables = []
@@ -268,7 +392,8 @@ def main():
         clustered_df, cluster_members_df = process_epitope(
             epitope, ep_df, args=args, genes=genes, locus=locus, lib=lib, proto=proto,
             airr_dir=airr_dir, tcremp_dir=tcremp_dir, tcrempnet_dir=tcrempnet_dir,
-            bg_pca=bg_pca, bg_reps=bg_reps, bg_ids=bg_ids, bg_index_path=bg_index_path, transform=transform,
+            bg_pca=bg_pca, bg_reps=bg_reps, bg_ids=bg_ids, bg_index_path=bg_index_path, bg_umap=bg_umap,
+            transform=transform,
         )
         clustered_tables.append(clustered_df)
         cluster_members_tables.append(cluster_members_df)
