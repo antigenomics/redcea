@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from mir.common.segments import SegmentLibrary
+from tcremp.utils import resolve_prototype_file
 try:
     from tcremp.arguments import get_arguments_vdjdb_clusters
     from tcremp.utils import configure_logging, prepare_output_path
@@ -209,7 +210,7 @@ def main():
     args.output = str(output_root)
     args.background_embedding = str(Path(args.background_embedding).resolve())
 
-    proto_path = Path(args.prototypes_path).resolve() if args.prototypes_path else None
+    proto_path =  resolve_prototype_file(args.prototypes_path)
 
     logging.info('Loading background embeddings')
     bg_emb, bg_reps, bg_ids, _ = load_embeddings(
