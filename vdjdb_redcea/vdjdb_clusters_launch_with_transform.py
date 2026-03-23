@@ -43,13 +43,23 @@ def build_airr_from_epitope(ep_df: pd.DataFrame, chain: str) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
-def resolve_joint_knn(sample_pca: np.ndarray, bg_pca: np.ndarray, k_neighbors: int, nproc: int):
+def resolve_joint_knn(
+    sample_pca: np.ndarray,
+    bg_pca: np.ndarray,
+    k_neighbors: int,
+    nproc: int,
+    sample_index_path: Path,
+    bg_index_path: Path,
+):
+    if sample_index_path is None or bg_index_path is None:
+        raise ValueError("sample_index_path and bg_index_path must be provided for joint kNN resolution.")
+
     result = compute_blockwise_knn_merged(
         bg=bg_pca,
         sample=sample_pca,
         k_neighbors=k_neighbors,
-        bg_index_path=None,
-        sample_index_path=None,
+        bg_index_path=bg_index_path,
+        sample_index_path=sample_index_path,
         rebuild_bg=False,
         rebuild_sample=False,
         save_blocks=False,
@@ -117,8 +127,8 @@ def load_or_fit_background_transform(*, args, output_root: Path, bg_emb: pd.Data
 
 
 def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str], locus: str, lib: SegmentLibrary,
-                    proto_path: Path | None, airr_dir: Path, tcremp_dir: Path, tcrempnet_dir: Path,
-                    bg_pca: np.ndarray, bg_reps: pd.DataFrame, bg_ids: pd.Series,
+                    proto, airr_dir: Path, tcremp_dir: Path, tcrempnet_dir: Path,
+                    bg_pca: np.ndarray, bg_reps: pd.DataFrame, bg_ids: pd.Series, bg_index_path: Path,
                     transform: BackgroundTransform) -> tuple[pd.DataFrame, pd.DataFrame]:
     chain = args.chain
     prefix = f"{chain.lower()}_vdjdb_{epitope}"
@@ -136,7 +146,7 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
         path=args.sample,
         args=args,
         is_sample=True,
-        proto=proto_path,
+        proto=proto,
         chain=genes,
         lib=lib,
         locus=locus,
@@ -144,7 +154,7 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
         output_path=tcremp_dir,
     )
 
-    sample_emb, sample_reps, sample_ids, _ = load_embeddings(
+    sample_emb, sample_reps, sample_ids, _, sample_index_path = load_embeddings(
         path=args.sample,
         args=args,
         is_sample=True,
@@ -155,7 +165,14 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
     )
 
     sample_pca = transform.transform_pca(sample_emb)
-    distances, indices = resolve_joint_knn(sample_pca, bg_pca, args.k_neighbors, args.nproc)
+    distances, indices = resolve_joint_knn(
+        sample_pca,
+        bg_pca,
+        args.k_neighbors,
+        args.nproc,
+        sample_index_path=sample_index_path,
+        bg_index_path=bg_index_path,
+    )
     labels = run_leiden_clustering(
         knn_indices=indices,
         knn_distances=distances,
@@ -216,9 +233,10 @@ def main():
     logging.info('Loading prototypes')
     proto = load_prototype_repertoire(proto_path, lib, locus, args.index_col)
     proto = subsample_repertoire(proto, args.n_prototypes, args.sample_random_clonotypes, args.random_seed)
+    logging.info(f'Loaded {len(proto)} prototypes')
     
     logging.info('Loading background embeddings')
-    bg_emb, bg_reps, bg_ids, _ = load_embeddings(
+    bg_emb, bg_reps, bg_ids, _, bg_index_path = load_embeddings(
         path=args.background,
         args=args,
         is_sample=False,
@@ -237,9 +255,9 @@ def main():
     cluster_members_tables = []
     for epitope, ep_df in vdjdb_df.groupby('antigen.epitope', sort=True):
         clustered_df, cluster_members_df = process_epitope(
-            epitope, ep_df, args=args, genes=genes, locus=locus, lib=lib, proto_path=proto_path,
+            epitope, ep_df, args=args, genes=genes, locus=locus, lib=lib, proto=proto,
             airr_dir=airr_dir, tcremp_dir=tcremp_dir, tcrempnet_dir=tcrempnet_dir,
-            bg_pca=bg_pca, bg_reps=bg_reps, bg_ids=bg_ids, transform=transform,
+            bg_pca=bg_pca, bg_reps=bg_reps, bg_ids=bg_ids, bg_index_path=bg_index_path, transform=transform,
         )
         clustered_tables.append(clustered_df)
         cluster_members_tables.append(cluster_members_df)

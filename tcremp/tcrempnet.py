@@ -87,6 +87,7 @@ def load_embeddings(path, args, is_sample, lib, locus, prefix, output_path):
     prefix_tag = 's_' if is_sample else 'b_'
     custom_path = args.sample_embedding if is_sample else args.background_embedding
     emb_path = resolve_embedding_file(custom_path, output_path, prefix, tag, must_exist=True)
+    index_path = Path(emb_path).with_suffix("").with_name(Path(emb_path).stem + "_faiss.index")
 
     emb = pd.read_parquet(emb_path)
 
@@ -107,7 +108,7 @@ def load_embeddings(path, args, is_sample, lib, locus, prefix, output_path):
 
     del rep
     gc.collect()
-    return emb, rep_df, ids, emb_path
+    return emb, rep_df, ids, emb_path, index_path
 
 
 def compute_cluster_summary(cluster_df, sample_ids):
@@ -162,22 +163,18 @@ def main():
     )
 
     logging.info("Loading sample embeddings...")
-    sample_emb, sample_representations, sample_ids, sample_emb_path = load_embeddings(
+    sample_emb, sample_representations, sample_ids, sample_emb_path, sample_index_path = load_embeddings(
         input_sample_path, args, is_sample=True, lib=lib,
         locus=locus, prefix=prefix, output_path=output_path
     )
 
     logging.info("Loading background embeddings...")
-    background_emb, background_representations, background_ids, bg_emb_path = load_embeddings(
+    background_emb, background_representations, background_ids, bg_emb_path, bg_index_path = load_embeddings(
         input_background_path, args, is_sample=False, lib=lib,
         locus=locus, prefix=prefix, output_path=output_path
     )
 
     log_memory_usage("After loading embeddings")
-
-    # FAISS index paths derived from embedding parquet paths
-    sample_index_path = Path(sample_emb_path).with_suffix("").with_name(Path(sample_emb_path).stem + "_faiss.index")
-    bg_index_path = Path(bg_emb_path).with_suffix("").with_name(Path(bg_emb_path).stem + "_faiss.index")
 
     logging.info(f"Sample FAISS index path: {sample_index_path}")
     logging.info(f"Background FAISS index path: {bg_index_path}")
