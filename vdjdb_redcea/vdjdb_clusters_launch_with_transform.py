@@ -177,6 +177,7 @@ def build_cluster_plot(
     sample_ids: pd.Series,
     sample_labels: np.ndarray,
     significant_cluster_ids: set[int],
+    summary_df: pd.DataFrame,
     sample_umap: np.ndarray,
     bg_umap: np.ndarray,
 ) -> go.Figure:
@@ -187,24 +188,28 @@ def build_cluster_plot(
     sample_df['x'] = sample_umap[:, 0]
     sample_df['y'] = sample_umap[:, 1]
     sample_df['significant'] = sample_df['cluster_id'].isin(significant_cluster_ids)
-    # Keep original cluster ids for all clustered clonotypes.
-    # Only true noise points from clustering should be shown as unclustered.
+    summary_by_cluster = summary_df.set_index('cluster_id')
+    sample_df['cluster_size_sample'] = sample_df['cluster_id'].map(summary_by_cluster['sample'])
+    sample_df['log_fold_change'] = sample_df['cluster_id'].map(summary_by_cluster['log_fold_change'])
+    # Preserve the true cluster id in cluster_id, but collapse non-significant
+    # and noise points into a single plotting group so they do not create extra
+    # legend entries.
     sample_df['cluster'] = np.where(
-        sample_df['cluster_id'] != -1,
+        sample_df['significant'],
         sample_df['cluster_id'].astype(str),
-        'unclustered',
+        '-1',
     )
     cluster_sizes = (
-        sample_df.loc[sample_df['cluster_id'] != -1, ['cluster_id']]
+        sample_df.loc[sample_df['significant'], ['cluster_id']]
         .value_counts()
         .rename('size')
         .reset_index()
         .sort_values(['size', 'cluster_id'], ascending=[False, True])
     )
     ordered_clusters = cluster_sizes['cluster_id'].astype(str).tolist()
-    category_orders = {'cluster': ['unclustered'] + ordered_clusters}
+    category_orders = {'cluster': ['-1'] + ordered_clusters}
 
-    color_discrete_map = {'unclustered': 'lightgrey'}
+    color_discrete_map = {'-1': 'lightgrey'}
     enriched_palette = px.colors.qualitative.Plotly
     enriched_labels = [
         cluster_label for cluster_label in ordered_clusters
@@ -222,7 +227,10 @@ def build_cluster_plot(
             f"v_{cfg['gene']}",
             f"j_{cfg['gene']}",
             'clone_id',
+            'cluster',
             'cluster_id',
+            'cluster_size_sample',
+            'log_fold_change',
             'significant',
         )
         if col in sample_df.columns
@@ -254,6 +262,32 @@ def build_cluster_plot(
     for trace in fig_scatter.data:
         fig.add_trace(trace)
 
+    annotation_df = (
+        sample_df[sample_df['significant']]
+        .groupby('cluster_id', as_index=False)
+        .agg(
+            x=('x', 'mean'),
+            y=('y', 'mean'),
+            cluster_size_sample=('cluster_size_sample', 'first'),
+            log_fold_change=('log_fold_change', 'first'),
+        )
+    )
+    for row in annotation_df.itertuples(index=False):
+        fig.add_annotation(
+            x=float(row.x),
+            y=float(row.y),
+            text=(
+                f"{int(row.cluster_id)}"
+                f"<br>n={int(row.cluster_size_sample)}"
+                f"<br>logFC={float(row.log_fold_change):.2f}"
+            ),
+            showarrow=False,
+            bgcolor='rgba(255,255,255,0.85)',
+            bordercolor='rgba(0,0,0,0.25)',
+            borderwidth=1,
+            font=dict(size=11),
+        )
+
     fig.update_layout(
         title=f'TCR clustering with background density ({epitope})',
         width=1000,
@@ -272,6 +306,7 @@ def save_cluster_plot_html(
     sample_pca: np.ndarray,
     sample_labels: np.ndarray,
     significant_cluster_ids: set[int],
+    summary_df: pd.DataFrame,
     bg_umap: np.ndarray,
     transform: BackgroundTransform,
     output_path: Path,
@@ -284,6 +319,7 @@ def save_cluster_plot_html(
         sample_ids=sample_ids,
         sample_labels=sample_labels,
         significant_cluster_ids=significant_cluster_ids,
+        summary_df=summary_df,
         sample_umap=sample_umap,
         bg_umap=bg_umap,
     )
@@ -400,6 +436,7 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
         sample_pca=sample_pca,
         sample_labels=sample_labels,
         significant_cluster_ids=significant_cluster_ids,
+        summary_df=summary_df,
         bg_umap=bg_umap,
         transform=transform,
         output_path=tcrempnet_dir / f"{prefix}_clusters.html",
