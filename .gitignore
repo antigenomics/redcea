@@ -165,3 +165,10 @@ cython_debug/
 #.idea/
 .idea
 .Rproj.user
+
+*.png
+*.jpg
+
+vdjdb_redcea/vdjdb-2025-12-29/*
+
+*.parquet

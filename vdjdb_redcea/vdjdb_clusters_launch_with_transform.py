@@ -162,11 +162,35 @@ def build_cluster_plot(
     sample_df['cluster_id'] = sample_labels
     sample_df['x'] = sample_umap[:, 0]
     sample_df['y'] = sample_umap[:, 1]
+    sample_df['significant'] = sample_df['cluster_id'].isin(significant_cluster_ids)
+    # Keep original cluster ids for all clustered clonotypes.
+    # Only true noise points from clustering should be shown as unclustered.
     sample_df['cluster'] = np.where(
-        (sample_df['cluster_id'] != -1) & sample_df['cluster_id'].isin(significant_cluster_ids),
+        sample_df['cluster_id'] != -1,
         sample_df['cluster_id'].astype(str),
         'unclustered',
     )
+    cluster_sizes = (
+        sample_df.loc[sample_df['cluster_id'] != -1, ['cluster_id']]
+        .value_counts()
+        .rename('size')
+        .reset_index()
+        .sort_values(['size', 'cluster_id'], ascending=[False, True])
+    )
+    ordered_clusters = cluster_sizes['cluster_id'].astype(str).tolist()
+    category_orders = {'cluster': ['unclustered'] + ordered_clusters}
+
+    color_discrete_map = {'unclustered': 'lightgrey'}
+    enriched_palette = px.colors.qualitative.Plotly
+    enriched_labels = [
+        cluster_label for cluster_label in ordered_clusters
+        if int(cluster_label) in significant_cluster_ids
+    ]
+    for i, cluster_label in enumerate(enriched_labels):
+        color_discrete_map[cluster_label] = enriched_palette[i % len(enriched_palette)]
+    for cluster_label in ordered_clusters:
+        if cluster_label not in color_discrete_map:
+            color_discrete_map[cluster_label] = '#B8B8B8'
 
     hover_cols = [
         col for col in (
@@ -175,6 +199,7 @@ def build_cluster_plot(
             f"j_{cfg['gene']}",
             'clone_id',
             'cluster_id',
+            'significant',
         )
         if col in sample_df.columns
     ]
@@ -184,7 +209,8 @@ def build_cluster_plot(
         x='x',
         y='y',
         color='cluster',
-        color_discrete_map={'unclustered': 'lightgrey'},
+        category_orders=category_orders,
+        color_discrete_map=color_discrete_map,
         hover_data=hover_cols,
     )
 
