@@ -160,6 +160,7 @@ def _get_or_compute_self_knn(
     nproc: int,
     mmap: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
+    phase_t0 = time.time()
     if (not rebuild_knn) and knn_prefix.with_suffix(".meta.json").exists():
         meta, dist, ind = _load_self_knn(knn_prefix, mmap=mmap)
 
@@ -177,7 +178,7 @@ def _get_or_compute_self_knn(
             raise RuntimeError(
                 f"Self-kNN cache wrong array shapes: dist={dist.shape}, ind={ind.shape}, expected={(data.shape[0], k)}"
             )
-        logging.info("Loaded cached self-kNN: %s", knn_prefix)
+        logging.info("Loaded cached self-kNN: %s in %.2fs", knn_prefix, time.time() - phase_t0)
         return dist.astype(np.float32, copy=False), ind.astype(np.int32, copy=False)
 
     idx = _build_or_load_index(data, index_path=index_path, rebuild=rebuild_index, nproc=nproc)
@@ -202,6 +203,7 @@ def _get_or_compute_self_knn(
     }
     _save_self_knn(knn_prefix, dist_l2, ind, meta)
     logging.info("Saved cached self-kNN: %s", knn_prefix)
+    logging.info("Finished self-kNN phase for %s in %.2fs", knn_prefix, time.time() - phase_t0)
     return dist_l2, ind
 
 
@@ -216,6 +218,7 @@ def _compute_cross_knn_l2(
     nproc: int,
     db_index: faiss.Index | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
+    phase_t0 = time.time()
     if db_index is None:
         db_index = _build_or_load_index(db, index_path=db_index_path, rebuild=rebuild_db_index, nproc=nproc)
     faiss.omp_set_num_threads(int(nproc))
@@ -225,6 +228,7 @@ def _compute_cross_knn_l2(
     dist_sq = np.asarray(dist_sq, dtype=np.float32)
     ind = np.asarray(ind, dtype=np.int32)
     dist_l2 = _squared_l2_to_l2_inplace(dist_sq, name="cross_knn_distances_sq")
+    logging.info("Finished cross-kNN phase for db=%s in %.2fs", db_index_path, time.time() - phase_t0)
     return dist_l2, ind
 
 
@@ -258,6 +262,8 @@ def compute_split_knn(
 
     Distances are L2 (NOT squared). Strict: NaN/inf -> raise.
     """
+
+    total_t0 = time.time()
 
     if isinstance(sample, pd.DataFrame):
         sample_arr = sample.to_numpy()
@@ -393,6 +399,15 @@ def compute_split_knn(
         k=k_neighbors,
         nproc=nproc,
         db_index=sample_index,
+    )
+
+    logging.info(
+        "compute_split_knn done in %.2fs (sampleN=%d, bgN=%d, k=%d, nproc=%d)",
+        time.time() - total_t0,
+        sample_arr.shape[0],
+        bg_arr.shape[0],
+        int(k_neighbors),
+        int(nproc),
     )
 
     return dist_ss, ind_ss, dist_bb, ind_bb, dist_sb, ind_sb, dist_bs, ind_bs

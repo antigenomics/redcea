@@ -31,8 +31,8 @@ def add_common_tcremp_args(parser: argparse.ArgumentParser) -> argparse.Argument
                         help='Speed-up the analysis by running for unique clonotypes (clones) in the input table')
     parser.add_argument('-r', '--random-seed', type=int, default=42,
                         help='Random seed for prototype sampling and other rng-based procedures. Defaults to 42.')
-    parser.add_argument('-np', '--nproc', type=int, default=1,
-                        help='Number of processes to perform calculation with. Will use 1 process by default.')
+    parser.add_argument('-np', '--nproc', type=int, default=None,
+                        help='Number of worker threads/processes to use. Defaults to auto-detect when not set.')
     parser.add_argument('-llen', '--lower-len-cdr3', type=int, default=5,
                         help='Filter out cdr3 with len <llen. Defaults to 5.')
     parser.add_argument('-hlen', '--higher-len-cdr3', type=int, default=30,

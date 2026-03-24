@@ -53,7 +53,13 @@ def setup_environment(args):
     locus = {'TRA': 'alpha', 'TRB': 'beta', 'TRA_TRB': None}[args.chain]
     lib = SegmentLibrary.load_default(genes=chain, organisms=args.species)
 
+    if args.nproc is None:
+        # Keep the automatic default conservative so the pipeline speeds up on
+        # common datasets without saturating the whole machine.
+        args.nproc = max(1, min(8, os.cpu_count() or 1))
+
     faiss.omp_set_num_threads(args.nproc)
+    logging.info("Using nproc=%d (override with --nproc)", args.nproc)
     print(f"FAISS threads set to {faiss.omp_get_max_threads()}")
 
     return input_sample_path, input_background_path, proto_path, output_path, prefix, chain, locus, lib
@@ -208,6 +214,7 @@ def main():
     sample_data = df[:sample_size]
 
     logging.info("Evaluating kNN via FAISS (split caches: sample-sample, bg-bg; cross on-the-fly)...")
+    knn_t0 = pd.Timestamp.now()
     dist_ss, ind_ss, dist_bb, ind_bb, dist_sb, ind_sb, dist_bs, ind_bs = compute_blockwise_knn_merged(
         bg=bg_data,
         sample=sample_data,
@@ -221,6 +228,7 @@ def main():
         nproc=args.nproc,
         bg_size_truncation=getattr(args, "n_bg_points", None)
     )
+    logging.info("Split FAISS kNN finished in %.2fs", (pd.Timestamp.now() - knn_t0).total_seconds())
 
     distances, indices = build_joint_knn_from_split(
         dist_ss=dist_ss, ind_ss=ind_ss,
