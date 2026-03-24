@@ -266,6 +266,7 @@ def run_leiden_clustering(
     metric: str = "dissimilarity",
     max_distance: float | None = None,
     min_cluster_size: int | None = None,
+    min_cluster_size_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Parallel Leiden clustering (NetworKit.ParallelLeiden) on a k-NN graph.
@@ -287,6 +288,8 @@ def run_leiden_clustering(
         can be skipped.
     min_cluster_size : int or None
         If set, clusters smaller than this size are marked as noise (-1).
+    min_cluster_size_mask : np.ndarray or None
+        Optional boolean mask selecting points to count toward min_cluster_size.
 
     Returns
     -------
@@ -329,11 +332,23 @@ def run_leiden_clustering(
     )
 
     if min_cluster_size is not None and min_cluster_size > 1:
-        uniq, counts = np.unique(labels, return_counts=True)
+        counted_labels = labels
+        size_label = "size"
+        if min_cluster_size_mask is not None:
+            mask = np.asarray(min_cluster_size_mask, dtype=bool)
+            if mask.shape != labels.shape:
+                raise ValueError(
+                    "min_cluster_size_mask must have the same shape as labels."
+                )
+            counted_labels = labels[mask]
+            size_label = "sample size"
+
+        uniq, counts = np.unique(counted_labels, return_counts=True)
         small = set(uniq[counts < min_cluster_size])
         if small:
             logging.info(
-                f"Marking {len(small)} small clusters (size < {min_cluster_size}) "
+                f"Marking {len(small)} small clusters "
+                f"({size_label} < {min_cluster_size}) "
                 "as noise (-1)."
             )
             mask = np.isin(labels, list(small))

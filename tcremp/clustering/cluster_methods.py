@@ -123,6 +123,7 @@ def run_leiden_clustering(
     metric: str = "dissimilarity",
     max_distance: float | None = None,
     min_cluster_size: int | None = None,
+    min_cluster_size_mask: np.ndarray | None = None,
     # compatibility alias used in some call-sites
     n_jobs: Optional[int] = None,
 ) -> np.ndarray:
@@ -163,10 +164,22 @@ def run_leiden_clustering(
     logging.info(f"Leiden finished: clusters={part.numberOfSubsets()}, labels shape={labels.shape}")
 
     if min_cluster_size is not None and int(min_cluster_size) > 1:
-        uniq, counts = np.unique(labels, return_counts=True)
+        counted_labels = labels
+        size_label = "size"
+        if min_cluster_size_mask is not None:
+            mask = np.asarray(min_cluster_size_mask, dtype=bool)
+            if mask.shape != labels.shape:
+                raise ValueError("min_cluster_size_mask must have the same shape as labels.")
+            counted_labels = labels[mask]
+            size_label = "sample size"
+
+        uniq, counts = np.unique(counted_labels, return_counts=True)
         small = set(uniq[counts < int(min_cluster_size)])
         if small:
-            logging.info(f"Marking {len(small)} small clusters (size < {min_cluster_size}) as noise (-1).")
+            logging.info(
+                f"Marking {len(small)} small clusters "
+                f"({size_label} < {min_cluster_size}) as noise (-1)."
+            )
             mask = np.isin(labels, list(small))
             labels[mask] = -1
 
