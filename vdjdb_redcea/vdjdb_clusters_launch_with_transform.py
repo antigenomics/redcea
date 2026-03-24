@@ -35,6 +35,11 @@ CHAIN_COLS = {
 DEFAULT_PLOT_BG_POINTS = 100_000
 
 
+def sanitize_filename_token(value: str) -> str:
+    safe = ''.join(ch if ch.isalnum() or ch in ('-', '_', '.') else '_' for ch in str(value).strip())
+    return safe.strip('._') or 'unknown'
+
+
 def build_airr_from_epitope(ep_df: pd.DataFrame, chain: str) -> pd.DataFrame:
     cfg = CHAIN_COLS[chain]
     out = ep_df[[cfg['cdr3'], cfg['v'], cfg['j']]].copy()
@@ -80,7 +85,8 @@ def resolve_joint_knn(
 
 
 def build_sample_members_table(sample_cluster_df: pd.DataFrame, summary_df: pd.DataFrame, chain: str,
-                               epitope_df: pd.DataFrame, epitope: str) -> pd.DataFrame:
+                               epitope_df: pd.DataFrame, epitope: str, sample_ids: pd.Series,
+                               sample_umap: np.ndarray) -> pd.DataFrame:
     cfg = CHAIN_COLS[chain]
     cdr3_col = f"cdr3aa_{cfg['gene']}"
     v_col = f"v_{cfg['gene']}"
@@ -89,6 +95,13 @@ def build_sample_members_table(sample_cluster_df: pd.DataFrame, summary_df: pd.D
     meta = epitope_df.iloc[0]
     cluster_sizes = summary_df.set_index('cluster_id')['cluster_size'].to_dict()
     chain_tag = 'A' if chain == 'TRA' else 'B'
+    sample_cluster_df = sample_cluster_df.copy()
+    umap_df = pd.DataFrame({
+        'clone_id': sample_ids.to_numpy(),
+        'x': sample_umap[:, 0],
+        'y': sample_umap[:, 1],
+    })
+    sample_cluster_df = sample_cluster_df.merge(umap_df, on='clone_id', how='left')
 
     return pd.DataFrame({
         'species': meta['species'],
@@ -100,11 +113,16 @@ def build_sample_members_table(sample_cluster_df: pd.DataFrame, summary_df: pd.D
         'mhc.class': meta['mhc.class'],
         'gene': chain,
         'cdr3aa': sample_cluster_df[cdr3_col].values,
+        'x': sample_cluster_df['x'].values,
+        'y': sample_cluster_df['y'].values,
         'cid': [f"H.{chain_tag}.{epitope}.{int(cid)}" for cid in sample_cluster_df['cluster_id'].values],
         'csz': [int(cluster_sizes[int(cid)]) for cid in sample_cluster_df['cluster_id'].values],
         'v.segm': sample_cluster_df[v_col].values,
         'j.segm': sample_cluster_df[j_col].values,
-        'cluster_id': sample_cluster_df['cluster_id'].values,
+        'v.end': pd.NA,
+        'j.start': pd.NA,
+        'v.segm.repr': sample_cluster_df[v_col].values,
+        'j.segm.repr': sample_cluster_df[j_col].values,
     })
 
 
@@ -297,7 +315,7 @@ def save_cluster_plot_html(
 
 
 def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str], locus: str, lib: SegmentLibrary,
-                    proto, airr_dir: Path, tcremp_dir: Path, tcrempnet_dir: Path,
+                    proto, airr_dir: Path, tcremp_dir: Path, tcrempnet_dir: Path, viz_dir: Path,
                     bg_pca: np.ndarray, bg_reps: pd.DataFrame, bg_ids: pd.Series, bg_index_path: Path,
                     bg_umap: np.ndarray,
                     transform: BackgroundTransform) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -399,10 +417,18 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
     ].copy()
     enriched_cluster_count = enriched_sample_cluster_df['cluster_id'].nunique()
 
-    cluster_members_df = build_sample_members_table(sample_cluster_df, summary_df, chain, ep_df, epitope)
+    sample_umap = transform.transform_umap(sample_pca)
+    cluster_members_df = build_sample_members_table(
+        sample_cluster_df, summary_df, chain, ep_df, epitope, sample_ids, sample_umap
+    )
     cluster_members_df.to_csv(tcrempnet_dir / f"{prefix}_cluster_members.tsv", sep='\t', index=False)
 
     sample_labels = np.asarray(labels[:len(sample_ids)], dtype=np.int32)
+    viz_filename = (
+        f"{sanitize_filename_token(args.species)}_"
+        f"{sanitize_filename_token(epitope)}_"
+        f"{sanitize_filename_token(chain)}.html"
+    )
     save_cluster_plot_html(
         epitope=epitope,
         chain=chain,
@@ -414,7 +440,7 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
         summary_df=summary_df,
         bg_umap=bg_umap,
         transform=transform,
-        output_path=tcrempnet_dir / f"{prefix}_clusters.html",
+        output_path=viz_dir / viz_filename,
     )
 
     logging.info(
@@ -436,10 +462,11 @@ def main():
     args = get_arguments_vdjdb_clusters()
 
     output_root = prepare_output_path(args.output)
+    viz_dir = output_root / 'viz'
     airr_dir = output_root / 'airr_format'
     tcremp_dir = output_root / 'tcremp'
     tcrempnet_dir = output_root / 'tcrempnet'
-    for p in (airr_dir, tcremp_dir, tcrempnet_dir):
+    for p in (viz_dir, airr_dir, tcremp_dir, tcrempnet_dir):
         p.mkdir(parents=True, exist_ok=True)
 
     configure_logging(Path(args.vdjdb), output_root, f"{args.chain.lower()}_vdjdb_clusters")
@@ -498,7 +525,7 @@ def main():
     for epitope, ep_df in vdjdb_df.groupby('antigen.epitope', sort=True):
         clustered_df, cluster_members_df = process_epitope(
             epitope, ep_df, args=args, genes=genes, locus=locus, lib=lib, proto=proto,
-            airr_dir=airr_dir, tcremp_dir=tcremp_dir, tcrempnet_dir=tcrempnet_dir,
+            airr_dir=airr_dir, tcremp_dir=tcremp_dir, tcrempnet_dir=tcrempnet_dir, viz_dir=viz_dir,
             bg_pca=bg_pca, bg_reps=bg_reps, bg_ids=bg_ids, bg_index_path=bg_index_path, bg_umap=bg_umap,
             transform=transform,
         )
@@ -512,7 +539,7 @@ def main():
         )
     if cluster_members_tables:
         pd.concat(cluster_members_tables, ignore_index=True).to_csv(
-            tcrempnet_dir / f"{chain_lower}_vdjdb_cluster_members.txt", sep='\t', index=False
+            output_root / "cluster_members.txt", sep='\t', index=False
         )
 
     logging.info('Done')
