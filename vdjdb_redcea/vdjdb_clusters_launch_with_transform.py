@@ -197,27 +197,21 @@ def build_cluster_plot(
     sample_df['cluster'] = np.where(
         sample_df['significant'],
         sample_df['cluster_id'].astype(str),
-        '-1',
+        'unclustered',
     )
-    cluster_sizes = (
-        sample_df.loc[sample_df['significant'], ['cluster_id']]
-        .value_counts()
-        .rename('size')
-        .reset_index()
-        .sort_values(['size', 'cluster_id'], ascending=[False, True])
-    )
-    ordered_clusters = cluster_sizes['cluster_id'].astype(str).tolist()
-    category_orders = {'cluster': ['-1'] + ordered_clusters}
+    ordered_clusters = sorted(sample_df.loc[sample_df['significant'], 'cluster_id'].unique().tolist())
+    ordered_cluster_labels = [str(cluster_id) for cluster_id in ordered_clusters]
+    category_orders = {'cluster': ['unclustered'] + ordered_cluster_labels}
 
-    color_discrete_map = {'-1': 'lightgrey'}
+    color_discrete_map = {'unclustered': 'lightgrey'}
     enriched_palette = px.colors.qualitative.Plotly
     enriched_labels = [
-        cluster_label for cluster_label in ordered_clusters
+        cluster_label for cluster_label in ordered_cluster_labels
         if int(cluster_label) in significant_cluster_ids
     ]
     for i, cluster_label in enumerate(enriched_labels):
         color_discrete_map[cluster_label] = enriched_palette[i % len(enriched_palette)]
-    for cluster_label in ordered_clusters:
+    for cluster_label in ordered_cluster_labels:
         if cluster_label not in color_discrete_map:
             color_discrete_map[cluster_label] = '#B8B8B8'
 
