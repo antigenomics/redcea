@@ -221,8 +221,8 @@ def build_cluster_plot(
         if cluster_label not in color_discrete_map:
             color_discrete_map[cluster_label] = '#B8B8B8'
 
-    hover_cols = [
-        col for col in (
+    hover_cols = {
+        col: True for col in (
             f"cdr3aa_{cfg['gene']}",
             f"v_{cfg['gene']}",
             f"j_{cfg['gene']}",
@@ -230,11 +230,12 @@ def build_cluster_plot(
             'cluster',
             'cluster_id',
             'cluster_size_sample',
-            'log_fold_change',
             'significant',
         )
         if col in sample_df.columns
-    ]
+    }
+    if 'log_fold_change' in sample_df.columns:
+        hover_cols['log_fold_change'] = ':.2f'
 
     fig_scatter = px.scatter(
         sample_df,
@@ -261,32 +262,6 @@ def build_cluster_plot(
     )
     for trace in fig_scatter.data:
         fig.add_trace(trace)
-
-    annotation_df = (
-        sample_df[sample_df['significant']]
-        .groupby('cluster_id', as_index=False)
-        .agg(
-            x=('x', 'mean'),
-            y=('y', 'mean'),
-            cluster_size_sample=('cluster_size_sample', 'first'),
-            log_fold_change=('log_fold_change', 'first'),
-        )
-    )
-    for row in annotation_df.itertuples(index=False):
-        fig.add_annotation(
-            x=float(row.x),
-            y=float(row.y),
-            text=(
-                f"{int(row.cluster_id)}"
-                f"<br>n={int(row.cluster_size_sample)}"
-                f"<br>logFC={float(row.log_fold_change):.2f}"
-            ),
-            showarrow=False,
-            bgcolor='rgba(255,255,255,0.85)',
-            bordercolor='rgba(0,0,0,0.25)',
-            borderwidth=1,
-            font=dict(size=11),
-        )
 
     fig.update_layout(
         title=f'TCR clustering with background density ({epitope})',
@@ -423,6 +398,12 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
         (cluster_df['cluster_id'] != -1)
     ].copy()
     sample_cluster_df.to_csv(tcrempnet_dir / f"{prefix}_clustered_sample_clonotypes.tsv", sep='\t', index=False)
+    sample_cluster_count = sample_cluster_df['cluster_id'].nunique()
+
+    enriched_sample_cluster_df = sample_cluster_df[
+        sample_cluster_df['cluster_id'].isin(significant_cluster_ids)
+    ].copy()
+    enriched_cluster_count = enriched_sample_cluster_df['cluster_id'].nunique()
 
     cluster_members_df = build_sample_members_table(sample_cluster_df, summary_df, chain, ep_df, epitope)
     cluster_members_df.to_csv(tcrempnet_dir / f"{prefix}_cluster_members.tsv", sep='\t', index=False)
@@ -442,8 +423,15 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
         output_path=tcrempnet_dir / f"{prefix}_clusters.html",
     )
 
-    logging.info('Done %s: sample=%d, clustered_sample=%d, clusters=%d',
-                 epitope, len(sample_reps), len(sample_cluster_df), summary_df.shape[0])
+    logging.info(
+        'Done %s: clustered_sample points=%d/%d, clusters=%d; enriched points=%d, clusters=%d',
+        epitope,
+        len(sample_cluster_df),
+        len(sample_reps),
+        sample_cluster_count,
+        len(enriched_sample_cluster_df),
+        enriched_cluster_count,
+    )
 
     del sample_emb, sample_reps, sample_ids, sample_pca, distances, indices, labels, joint_ids, joint_reps, cluster_df
     gc.collect()
