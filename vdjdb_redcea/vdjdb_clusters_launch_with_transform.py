@@ -152,6 +152,7 @@ def build_cluster_plot(
     sample_reps: pd.DataFrame,
     sample_ids: pd.Series,
     sample_labels: np.ndarray,
+    significant_cluster_ids: set[int],
     sample_umap: np.ndarray,
     bg_umap: np.ndarray,
 ) -> go.Figure:
@@ -161,7 +162,11 @@ def build_cluster_plot(
     sample_df['cluster_id'] = sample_labels
     sample_df['x'] = sample_umap[:, 0]
     sample_df['y'] = sample_umap[:, 1]
-    sample_df['cluster'] = np.where(sample_df['cluster_id'] == -1, 'unclustered', sample_df['cluster_id'].astype(str))
+    sample_df['cluster'] = np.where(
+        (sample_df['cluster_id'] != -1) & sample_df['cluster_id'].isin(significant_cluster_ids),
+        sample_df['cluster_id'].astype(str),
+        'unclustered',
+    )
 
     hover_cols = [
         col for col in (
@@ -216,6 +221,7 @@ def save_cluster_plot_html(
     sample_ids: pd.Series,
     sample_pca: np.ndarray,
     sample_labels: np.ndarray,
+    significant_cluster_ids: set[int],
     bg_umap: np.ndarray,
     transform: BackgroundTransform,
     output_path: Path,
@@ -227,6 +233,7 @@ def save_cluster_plot_html(
         sample_reps=sample_reps,
         sample_ids=sample_ids,
         sample_labels=sample_labels,
+        significant_cluster_ids=significant_cluster_ids,
         sample_umap=sample_umap,
         bg_umap=bg_umap,
     )
@@ -288,6 +295,7 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
         resolution=args.leiden_resolution,
         n_threads=args.nproc,
         min_cluster_size=args.cluster_min_samples,
+        min_cluster_size_mask=np.arange(len(sample_pca) + len(bg_pca)) < len(sample_pca),
     )
 
     joint_ids = pd.concat([sample_ids, bg_ids], ignore_index=True)
@@ -310,6 +318,7 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
         (summary_df['enrichment_fdr_zbinom'] < 0.05) &
         (summary_df['log_fold_change'] > 0)
     )
+    significant_cluster_ids = set(summary_df.loc[summary_df['significant'], 'cluster_id'].astype(int))
     summary_df[
         [
             'cluster_id',
@@ -323,7 +332,10 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
         ]
     ].to_csv(tcrempnet_dir / f"{prefix}_summary_tcrempnet.tsv", sep='\t', index=False)
 
-    sample_cluster_df = cluster_df[(cluster_df['clone_id'].isin(set(sample_ids))) & (cluster_df['cluster_id'] != -1)].copy()
+    sample_cluster_df = cluster_df[
+        (cluster_df['clone_id'].isin(set(sample_ids))) &
+        (cluster_df['cluster_id'].isin(significant_cluster_ids))
+    ].copy()
     sample_cluster_df.to_csv(tcrempnet_dir / f"{prefix}_clustered_sample_clonotypes.tsv", sep='\t', index=False)
 
     cluster_members_df = build_sample_members_table(sample_cluster_df, summary_df, chain, ep_df, epitope)
@@ -337,6 +349,7 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
         sample_ids=sample_ids,
         sample_pca=sample_pca,
         sample_labels=sample_labels,
+        significant_cluster_ids=significant_cluster_ids,
         bg_umap=bg_umap,
         transform=transform,
         output_path=tcrempnet_dir / f"{prefix}_clusters.html",
