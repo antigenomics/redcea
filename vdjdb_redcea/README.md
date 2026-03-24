@@ -158,6 +158,7 @@ python vdjdb_redcea/vdjdb_clusters_launch_with_transform.py \
 ## Замечания по использованию
 
 - Background transform обучается на фоне и автоматически сохраняется в `OUTPUT/tcremp/{chain}_background_transform.joblib`. При повторном запуске он будет переиспользован.
+- Background UMAP для density plot тоже кешируется: рядом появится файл вида `OUTPUT/tcremp/{chain}_background_transform_bg_umap_<N>.npy`, где `N` это фактический `n_bg_points` для графика.
 - Если для эпитопа уже есть сохранённый parquet эмбеддингов в `tcremp/`, скрипт их не пересчитывает.
 - `--n-bg-points` обрезает фон по первым строкам, а не случайно. Для воспроизводимости это удобно, но важно помнить при интерпретации.
 - Булевы параметры в текущем CLI объявлены через `type=bool`, поэтому передавать их лучше явно, например `--sample-random-prototypes True`.

@@ -108,9 +108,17 @@ def build_sample_members_table(sample_cluster_df: pd.DataFrame, summary_df: pd.D
     })
 
 
-def load_or_fit_background_transform(*, args, output_root: Path, bg_emb: pd.DataFrame) -> BackgroundTransform:
+def get_background_transform_path(*, args, output_root: Path) -> Path:
     default_path = output_root / 'tcremp' / f"{args.chain.lower()}_background_transform.joblib"
-    transform_path = Path(getattr(args, 'background_transform', None) or default_path)
+    return Path(getattr(args, 'background_transform', None) or default_path)
+
+
+def get_background_umap_cache_path(*, transform_path: Path, n_bg_points: int) -> Path:
+    return transform_path.with_name(f"{transform_path.stem}_bg_umap_{int(n_bg_points)}.npy")
+
+
+def load_or_fit_background_transform(*, args, output_root: Path, bg_emb: pd.DataFrame) -> tuple[BackgroundTransform, Path]:
+    transform_path = get_background_transform_path(args=args, output_root=output_root)
 
     if transform_path.exists():
         logging.info('Loading background transform from %s', transform_path)
@@ -126,23 +134,39 @@ def load_or_fit_background_transform(*, args, output_root: Path, bg_emb: pd.Data
         transform.save(transform_path)
         logging.info('Saved background transform to %s', transform_path)
 
-    return transform
+    return transform, transform_path
 
 
-def prepare_background_umap(transform: BackgroundTransform, bg_pca: np.ndarray, n_bg_points: int) -> np.ndarray:
+def prepare_background_umap(
+    transform: BackgroundTransform,
+    bg_pca: np.ndarray,
+    n_bg_points: int,
+    *,
+    transform_path: Path,
+) -> np.ndarray:
     bg_pca_subset = np.asarray(bg_pca[:n_bg_points], dtype=np.float32)
     if bg_pca_subset.size == 0:
         raise ValueError('Cannot prepare background UMAP for empty background PCA array')
 
+    cache_path = get_background_umap_cache_path(transform_path=transform_path, n_bg_points=len(bg_pca_subset))
+    if cache_path.exists():
+        logging.info('Loading cached background UMAP from %s', cache_path)
+        return np.load(cache_path).astype(np.float32, copy=False)
+
     if transform.umap_model is None:
         logging.info('Fitting UMAP for plotting on first %d background clonotypes', len(bg_pca_subset))
-        return transform.fit_umap(bg_pca_subset)
+        bg_umap = transform.fit_umap(bg_pca_subset)
+        transform.save(transform_path)
+        logging.info('Saved background transform with fitted UMAP to %s', transform_path)
+    elif transform.background_umap_ is not None and len(transform.background_umap_) >= len(bg_pca_subset):
+        bg_umap = np.asarray(transform.background_umap_[:len(bg_pca_subset)], dtype=np.float32)
+    else:
+        logging.info('Using existing UMAP model to transform first %d background clonotypes for plotting', len(bg_pca_subset))
+        bg_umap = transform.transform_umap(bg_pca_subset)
 
-    if transform.background_umap_ is not None and len(transform.background_umap_) >= len(bg_pca_subset):
-        return np.asarray(transform.background_umap_[:len(bg_pca_subset)], dtype=np.float32)
-
-    logging.info('Using existing UMAP model to transform first %d background clonotypes for plotting', len(bg_pca_subset))
-    return transform.transform_umap(bg_pca_subset)
+    np.save(cache_path, np.asarray(bg_umap, dtype=np.float32))
+    logging.info('Saved cached background UMAP to %s', cache_path)
+    return np.asarray(bg_umap, dtype=np.float32)
 
 
 def build_cluster_plot(
@@ -443,12 +467,12 @@ def main():
         output_path=tcremp_dir,
     )
 
-    transform = load_or_fit_background_transform(args=args, output_root=output_root, bg_emb=bg_emb)
+    transform, transform_path = load_or_fit_background_transform(args=args, output_root=output_root, bg_emb=bg_emb)
     bg_pca = transform.background_pca_
     if bg_pca is None:
         bg_pca = transform.transform_pca(bg_emb)
     plot_bg_points = min(len(bg_pca), args.n_bg_points or DEFAULT_PLOT_BG_POINTS)
-    bg_umap = prepare_background_umap(transform, bg_pca, plot_bg_points)
+    bg_umap = prepare_background_umap(transform, bg_pca, plot_bg_points, transform_path=transform_path)
 
     clustered_tables = []
     cluster_members_tables = []
