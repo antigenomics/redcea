@@ -11,8 +11,12 @@ from kneed import KneeLocator
 import multiprocessing as mp
 
 import faiss
-import networkit as nk
-import networkit.community as nkc
+try:
+    import networkit as nk
+    import networkit.community as nkc
+except Exception:
+    nk = None
+    nkc = None
 
 
 # =====================================

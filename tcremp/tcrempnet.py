@@ -363,9 +363,10 @@ def main():
     logging.info("Saved cluster summary with p-values.")
 
     enriched_clusters = summary.loc[
-        summary['enrichment_fdr_zbinom'] < 0.05, ['cluster_id', 'enrichment_pvalue_zbinom']
+        (summary['enrichment_fdr_zbinom'] < 0.05) & (summary['log_fold_change'] > 0),
+        ['cluster_id', 'enrichment_pvalue_zbinom']
     ]
-    logging.info(f"{len(enriched_clusters)} clusters identified as enriched (fdr < 0.05).")
+    logging.info(f"{len(enriched_clusters)} clusters identified as enriched (fdr < 0.05, logFC > 0).")
 
     enriched_clonotypes = cluster_df.merge(enriched_clusters).merge(joint_representations)
     enriched_clonotypes.to_csv(

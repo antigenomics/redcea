@@ -22,24 +22,40 @@ keywords = ["antigen", "antibody", "t-cell", "receptor", "sequence", "embedding"
 requires-python = ">=3.10"
 dependencies = [
   "mir@git+https://github.com/antigenomics/mirpy.git@0.1.2-mirpy-fastAlign",
-  "numpy==2.3.5",
-  "scipy==1.16.3",
-  "pandas",
-  "matplotlib",
-  "seaborn",
-  "scikit-learn",
-  "biopython",
-  "kneed",
-  "umap-learn",
-  "textdistance",
-  "plotnine",
-  "xgboost",
+  "numpy>=1.26,<3",
+  "scipy>=1.11,<2",
+  "pandas>=2.0,<3",
+  "matplotlib>=3.7,<4",
+  "seaborn>=0.12,<1",
+  "scikit-learn>=1.3,<2",
+  "biopython>=1.81,<2",
+  "kneed>=0.8.5,<1",
+  "umap-learn>=0.5.3,<1",
+  "textdistance>=4.5,<5",
+  "plotnine>=0.12,<1",
+  "xgboost>=2.1,<3",
   "olga==1.2.4",
   "psutil>=5.9",
   "faiss-cpu>=1.7.4",
   "pympler>=1.0.1",
   "fastparquet>=2023.4.0",
-  "networkit==11.2"
+  "plotly>=5,<7",
+  "joblib>=1.3",
+  "statsmodels>=0.14,<1",
+  "networkx>=3,<4",
+  "logomaker>=0.8,<1"
+]
+
+[project.optional-dependencies]
+leiden = [
+  "networkit==11.2; platform_system != 'Windows'"
+]
+bench = [
+  "hnswlib>=0.8.0"
+]
+all = [
+  "networkit==11.2; platform_system != 'Windows'",
+  "hnswlib>=0.8.0"
 ]
 
 [project.scripts]

@@ -30,6 +30,10 @@ def configure_logging(input_path, output_path, output_prefix):
     handler.setFormatter(formatter)
     logging.getLogger().addHandler(handler)
 
+    # Suppress verbose numba internals unless explicitly re-enabled.
+    for logger_name in ('numba', 'numba.core', 'numba.core.byteflow', 'numba.core.interpreter', 'numba.core.ssa'):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
 
 def prepare_output_path(output: str) -> Path:
     path = Path(output)

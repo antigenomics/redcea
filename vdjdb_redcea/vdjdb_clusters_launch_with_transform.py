@@ -16,13 +16,13 @@ from tcremp.utils import load_prototype_repertoire, resolve_prototype_file, subs
 
 try:
     from tcremp.arguments import get_arguments_vdjdb_clusters
-    from tcremp.utils import configure_logging, prepare_output_path
+    from tcremp.utils import configure_logging, prepare_output_path, add_z_binom_pvalues, add_log_fold_change
     from tcremp.tcrempnet import compute_embeddings_if_needed, load_embeddings, compute_cluster_summary
     from tcremp.clustering import compute_blockwise_knn_merged, run_leiden_clustering
     from tcremp.background_transform import BackgroundTransform
 except ImportError:
     from arguments_refactored import get_arguments_vdjdb_clusters
-    from utils import configure_logging, prepare_output_path
+    from utils import configure_logging, prepare_output_path, add_z_binom_pvalues, add_log_fold_change
     from tcrempnet import compute_embeddings_if_needed, load_embeddings, compute_cluster_summary
     from tcremp_cluster import compute_blockwise_knn_merged, run_leiden_clustering
     from background_transform import BackgroundTransform
@@ -296,7 +296,32 @@ def process_epitope(epitope: str, ep_df: pd.DataFrame, *, args, genes: list[str]
     cluster_df.to_csv(tcrempnet_dir / f"{prefix}_tcremp_clusters.tsv", sep='\t', index=False)
 
     summary_df = compute_cluster_summary(cluster_df.copy(), sample_ids)
-    summary_df.to_csv(tcrempnet_dir / f"{prefix}_summary_tcrempnet.tsv", sep='\t', index=False)
+    summary_df = add_z_binom_pvalues(
+        summary_df,
+        total_sample=len(sample_ids),
+        total_background=len(bg_ids),
+    )
+    summary_df = add_log_fold_change(
+        summary_df,
+        total_sample=len(sample_ids),
+        total_background=len(bg_ids),
+    )
+    summary_df['significant'] = (
+        (summary_df['enrichment_fdr_zbinom'] < 0.05) &
+        (summary_df['log_fold_change'] > 0)
+    )
+    summary_df[
+        [
+            'cluster_id',
+            'cluster_size',
+            'sample',
+            'background',
+            'enrichment_pvalue_zbinom',
+            'enrichment_fdr_zbinom',
+            'log_fold_change',
+            'significant',
+        ]
+    ].to_csv(tcrempnet_dir / f"{prefix}_summary_tcrempnet.tsv", sep='\t', index=False)
 
     sample_cluster_df = cluster_df[(cluster_df['clone_id'].isin(set(sample_ids))) & (cluster_df['cluster_id'] != -1)].copy()
     sample_cluster_df.to_csv(tcrempnet_dir / f"{prefix}_clustered_sample_clonotypes.tsv", sep='\t', index=False)
