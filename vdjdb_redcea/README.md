@@ -120,7 +120,7 @@ Main output files:
 - `tcrempnet/<prefix>_cluster_members.tsv`: sample cluster members exported in the VDJdb-like downstream format.
 - `viz/<species>_<epitope>_<chain>.html`: interactive Plotly visualization.
 - `tcrempnet/<chain>_vdjdb_clustered_clonotypes.tsv`: concatenated sample-clonotype clustering table across all processed epitopes.
-- `cluster_members.txt`: concatenated cluster-member table across all processed epitopes.
+- `cluster_members_<chain>.txt`: concatenated cluster-member table across all processed epitopes.
 
 Here, `prefix` is built as:
 

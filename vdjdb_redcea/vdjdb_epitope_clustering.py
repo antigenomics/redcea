@@ -316,6 +316,18 @@ def main():
         lib = SegmentLibrary.load_default(genes=genes, organisms=args.species)
 
         vdjdb_df = pd.read_csv(args.vdjdb, sep="\t")
+        chain_cfg = CHAIN_COLS[args.chain]
+        required_cols = ["antigen.epitope", chain_cfg["cdr3"]]
+        before_chain_cleanup = len(vdjdb_df)
+        vdjdb_df = vdjdb_df.dropna(subset=required_cols).copy()
+        logging.info(
+            "Filtered VDJdb rows for chain %s after dropping NaNs in %s: %d -> %d",
+            args.chain,
+            required_cols,
+            before_chain_cleanup,
+            len(vdjdb_df),
+        )
+
         if args.epitopes is not None:
             vdjdb_df = vdjdb_df[vdjdb_df["antigen.epitope"].isin(args.epitopes)].copy()
         if args.min_epitope_clonotypes is not None:
@@ -388,7 +400,7 @@ def main():
             )
         if cluster_members_tables:
             pd.concat(cluster_members_tables, ignore_index=True).to_csv(
-                output_root / "cluster_members.txt", sep="\t", index=False
+                output_root / f"cluster_members_{args.chain}.txt", sep="\t", index=False
             )
 
         logging.info("Done")
