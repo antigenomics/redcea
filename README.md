@@ -1,66 +1,133 @@
 # RedCEA: Repertoire Embeddings Denoising Clustering Enrichment Analysis
 
-RedCEA is a pipeline for comparing immune repertoires using prototype-based TCR embeddings. It builds on the original TCRemP embedding method, while adding denoising, clustering, and enrichment analysis for case/control repertoire comparisons.
+RedCEA is a pipeline for comparing immune repertoires using prototype-based TCR embeddings. It builds on the original TCRemP embedding method and adds denoising, clustering, and enrichment analysis for case/background repertoire comparisons.
 
 This repository contains command-line tools for:
 
-* Computing prototype-based embeddings for a case and background repertoire (`tcremp-run`)
-* Performing clustering using PCA + DBSCAN (`tcremp-cluster`)
-* Comparing cluster enrichment across conditions (`redcea`)
+* computing prototype-based embeddings for a repertoire with `tcremp-run`
+* clustering embeddings with `tcremp-cluster`
+* running the end-to-end comparison pipeline with `redcea`
 
 ---
 
-## 🛠 Installation
+## Installation
+
+### Prerequisites
+
+Prepare a clean Linux server with:
+
+* `git`
+* `conda` such as Miniconda or Mambaforge
+* internet access for Python package installation
+* access to GitHub, because dependency `mir` is installed from a git URL
+
+Recommended Python version: `3.11`.
+
+### Create the environment
 
 ```bash
 git clone https://gitlab.aldan3.itm-rsmu.ru/isagroup/redcea.git
 cd redcea
-conda env create -n redcea python=3.11
+
+conda create -n redcea python=3.11 -y
 conda activate redcea
-pip install -e .
+
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .[test]
 ```
 
-Ensure the `mirpy` library is installed and importable.
+This installs:
+
+* the package in editable mode
+* CLI entry points `redcea`, `tcrempnet`, `tcremp-run`, `tcremp-cluster`
+* test dependencies including `pytest`
+
+Notes:
+
+* `mir` is installed from `https://github.com/antigenomics/mirpy.git`
+* default clustering for `redcea` is `vdbscan`
+* optional Leiden-based clustering requires an extra dependency
+
+### Optional: install Leiden support
+
+If you plan to run `--cluster-algo leiden`, `hierarchical_leiden`, or `leiden_dbscan`, install the optional Leiden dependency:
+
+```bash
+python -m pip install .[leiden]
+```
+
+If this optional install fails, you can still run the default `vdbscan` pipeline.
+
+### Verify the installation
+
+Run the following commands in the activated environment:
+
+```bash
+python -c "import redcea, tcremp, mir; print('imports: OK')"
+redcea --help
+tcremp-run --help
+pytest -q
+```
+
+Expected result:
+
+* imports succeed without `ModuleNotFoundError`
+* CLI help is printed for both commands
+* tests pass
+
+Important limitation:
+
+* the test suite validates parser logic, helper functions, and a mocked pipeline smoke test
+* it does not replace a real run on a small dataset in your target environment
+
+### Recommended post-install smoke check
+
+For a fresh server, use this validation sequence:
+
+1. install the package with `python -m pip install -e .[test]`
+2. run `redcea --help`
+3. run `pytest -q`
+4. run one small real dataset through `redcea` or `tcremp-run`
+5. confirm that expected output files are created and the log ends without runtime errors
 
 ---
 
-## 🚀 Running RedCEA
+## Running RedCEA
 
-### Option 1: Two-step execution (embedding + enrichment separately)
+### Option 1: two-step execution
 
-💡 **Tip:** If you're planning to use the same background repertoire for multiple case samples (e.g., comparing several patient samples against a shared healthy baseline), it's highly recommended to compute and save background embeddings once using `tcremp-run`, and reuse them in all downstream `redcea` runs. This significantly reduces runtime and avoids redundant computations.
+If you plan to compare multiple case samples against the same background repertoire, compute the background embeddings once with `tcremp-run` and reuse them in downstream `redcea` runs.
 
-#### Step 1: Compute embeddings for each sample using `tcremp-run`
+#### Step 1: compute embeddings
 
 ```bash
 tcremp-run \
   --input /projects/immunestatus/airr_format/sample.tsv \
-  --output ./results --chain TRB -np 48
+  --output ./results \
+  --chain TRB \
+  -np 48
 ```
 
-This produces:
+This produces embedding outputs in `./results`.
 
-* `results/sample_tcremp.parquet` — embedding table with prototype distances (in `.parquet` format)
-* `results/sample_tcremp_clusters.tsv` — clustering results (optional if `--cluster` was used)
+For large samples, embedding can take hours and requires substantial CPU and memory.
 
-⚠️ Embedding is resource-intensive. For large samples (100,000+ clonotypes), allow up to 8 hours on 48 CPUs.
-
-#### Step 2: Run `redcea` on saved embeddings
+#### Step 2: run `redcea` on saved embeddings
 
 ```bash
 redcea \
   -is /projects/immunestatus/airr_format/sample.tsv \
   -ib /projects/immunestatus/airr_format/background.tsv \
-  -c TRB -o ./results -np 4
+  -c TRB \
+  -o ./results \
+  -np 4 \
   -se ./results/sample_tcremp.parquet \
   -be ./results/background_tcremp.parquet
 ```
 
-> ✅ This step is fast: clustering + enrichment takes \~10 minutes per sample pair.
+Use this mode when the embedding files already exist and you want to skip recomputation.
 
----
-
-### Option 2: End-to-end pipeline
+### Option 2: end-to-end pipeline
 
 ```bash
 redcea \
@@ -71,21 +138,21 @@ redcea \
   -np 8
 ```
 
-Embeddings for both case/control are computed internally.
+In this mode, embeddings for both sample and background are computed automatically if they are not already available.
 
 ---
 
-## 📤 CLI Tools
+## CLI Tools
 
-| CLI Tool         | Description                                        |
-| ---------------- | -------------------------------------------------- |
-| `tcremp-run`     | Computes TCRemP embeddings and optional clustering |
-| `redcea`         | Performs embedding, clustering, and enrichment     |
-| `tcremp-cluster` | Clusters existing embeddings via PCA + DBSCAN      |
+| CLI Tool | Description |
+| --- | --- |
+| `tcremp-run` | Computes TCRemP embeddings and optional clustering |
+| `redcea` | Runs embedding, clustering, and enrichment |
+| `tcremp-cluster` | Clusters existing embeddings |
 
 ---
 
-## 🧪 Example: Yellow Fever Dataset
+## Example: Yellow Fever Dataset
 
 ```bash
 redcea \
@@ -99,26 +166,50 @@ redcea \
 
 ---
 
-## 📥 Output files
+## Output Files
 
-Depending on the mode, the pipeline outputs:
+Depending on the mode, the pipeline may create:
 
-| File Name                          | Description                                                                                 |
-| ---------------------------------- | ------------------------------------------------------------------------------------------- |
-| `*_tcremp.parquet`                 | Embedding table with distances to all prototypes and clonotype metadata (in parquet format) |
-| `*_tcremp_clusters.tsv`            | Clustering results per clonotype: `clone_id`, `cluster_id`, `cdr3aa`, `v`, `j`              |
-| `*_summary_tcrempnet.tsv`          | Summary statistics for each cluster: size, enrichment p-value, FDR, case/control presence   |
-| `*_enriched_clonotypes_tcremp.tsv` | Clonotypes from enriched clusters (FDR < 0.05), useful for downstream biological analysis   |
-| `*.log`                            | Run log for debugging and runtime tracking                                                  |
+| File Name | Description |
+| --- | --- |
+| `*_sample_embeddings.parquet` | Sample embeddings produced or reused by `redcea` |
+| `*_background_embeddings.parquet` | Background embeddings produced or reused by `redcea` |
+| `*_tcremp_clusters.tsv` | Cluster assignments for both sample and background clonotypes |
+| `*_summary_tcrempnet.tsv` | Per-cluster summary with counts, p-values, FDR, and log fold change |
+| `*_enriched_clonotypes_tcremp.tsv` | Clonotypes from enriched clusters |
+| `*_enriched_embeddings_tcremp.parquet` | Embeddings of enriched clonotypes with cluster metadata |
+| `*.log` | Run log for debugging and runtime tracking |
 
-> If `--cluster` is disabled, only embeddings are saved.
+### What to check after a real run
+
+Treat the run as successful only if all of the following are true:
+
+* the output directory exists
+* `*_sample_embeddings.parquet` and `*_background_embeddings.parquet` exist or were intentionally supplied as inputs
+* `*_tcremp_clusters.tsv` exists
+* `*_summary_tcrempnet.tsv` exists and contains `cluster_id`, `cluster_size`, `sample`, `background`, `enrichment_fdr_zbinom`, and `log_fold_change`
+* the log file ends with `TCRempNet pipeline completed.`
 
 ---
 
-## 📎 SLURM job example
+## Input Expectations
 
-> Make sure you have activated the `redcea` environment **before** submitting slurm jobs.
+The pipeline expects repertoire tables that can be parsed by the underlying `tcremp` AIRR-loading utilities.
 
+Before running on a clean server, verify on one small file that:
+
+* the file path is correct and readable by the current user
+* the repertoire contains the requested chain: `TRA`, `TRB`, or `TRA_TRB`
+* required CDR3 and V/J fields expected by `tcremp` are present
+* the file is not empty after filtering by chain and CDR3 length
+
+If a run fails at startup, first check file format compatibility and chain selection.
+
+---
+
+## SLURM Job Example
+
+Activate the `redcea` environment before submitting the job.
 
 ### Full pipeline
 
@@ -150,41 +241,45 @@ tcremp-run \
 
 ---
 
-## ⚙️ Arguments
+## Arguments
 
 | Short | Long | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `-is` | `--sample` | Yes | — | Path to input file containing a clonotype (clone) table of the sample repertoire. |
-| `-ib` | `--background` | Yes | — | Path to input file containing a clonotype (clone) table of the background repertoire. |
-| `-o` | `--output` | Yes | — | Path to the output folder. |
-| `-e` | `--prefix` | No | input filename | Output prefix. Defaults to the input clonotype table filename. |
-| `-x` | `--index-col` | No | — | Optional: column in the input table containing user-defined IDs to be transferred to outputs. |
-| `-c` | `--chain` | Yes | — | Chain type: `TRA` or `TRB` for single-chain clonotypes, or `TRA_TRB` for paired-chain clones. |
-| `-p` | `--prototypes-path` | No | prebuilt set | Path to user-specified prototypes file. If not set, prebuilt prototypes from `$tcremp_path/data/data_prebuilt` are used. |
-| `-n` | `--n-prototypes` | No | all available | Number of prototypes to use for embedding. Coordinates = (chains) × (V,J,CDR3 distances) × (n). |
-| — | `--sample-random-prototypes` | No | `False` | Whether to sample prototypes randomly. |
-| `-nc` | `--n-clonotypes` | No | all available | Number of clonotypes to process. |
-| — | `--sample-random-clonotypes` | No | `False` | Whether to sample clonotypes randomly. |
-| `-s` | `--species` | No | `HomoSapiens` | Species for V/J gene alignment. Options: `HomoSapiens`, `MusMusculus`, `MacacaMulatta`. |
-| `-u` | `--unique-clonotypes` | No | — | Run only on unique clonotypes/clones to speed up analysis. |
-| `-r` | `--random-seed` | No | `42` | Random seed for prototype sampling and other RNG-based steps. |
-| `-np` | `--nproc` | No | `1` | Number of parallel processes. |
-| `-llen` | `--lower-len-cdr3` | No | `5` | Minimum CDR3 length to keep. Shorter ones are filtered. |
-| `-hlen` | `--higher-len-cdr3` | No | `30` | Maximum CDR3 length to keep. Longer ones are filtered. |
-| `-m` | `--metrics` | No | `dissimilarity` | Whether to calculate similarity or dissimilarity scores with TCRemP. |
-| — | `--sample-embeddings` | No | — | Path to precomputed sample embeddings (`.parquet`). |
-| — | `--background-embeddings` | No | — | Path to precomputed background embeddings (`.parquet`). |
-| `-d` | `--save-dists` | No | `True` | Whether to save TCRemP distances. |
-| `-cl` | `--cluster` | No | `True` | Whether to perform clustering. |
-| `-npc` | `--cluster-pc-components` | No | `50` | Number of PCA components before clustering. |
-| `-ms` | `--cluster-min-samples` | No | `3` | `min_samples` parameter for DBSCAN. |
-| `-kn` | `--k-neighbors` | No | `4` | k-th neighbor parameter for Knee eps estimation. |
-| `-se` | `--sample-embedding` | No | — | Path to a sample embedding file (`.parquet`). Computed if not provided. |
-| `-be` | `--background-embedding` | No | — | Path to a background embedding file (`.parquet`). Computed if not provided. |
-| — | `--cluster-algo` | No | `dbscan` | Clustering algorithm to use: `dbscan` or `hdbscan`. |
+| --- | --- | --- | --- | --- |
+| `-is` | `--sample` | Yes | none | Path to the sample repertoire table |
+| `-ib` | `--background` | Yes | none | Path to the background repertoire table |
+| `-o` | `--output` | Yes | none | Output directory |
+| `-e` | `--prefix` | No | input filename | Output prefix |
+| `-x` | `--index-col` | No | none | Optional input ID column to preserve in outputs |
+| `-c` | `--chain` | Yes | none | `TRA`, `TRB`, or `TRA_TRB` |
+| `-p` | `--prototypes-path` | No | package defaults | Path to a user-supplied prototypes file |
+| `-n` | `--n-prototypes` | No | all available | Number of prototypes used for embedding |
+| none | `--sample-random-prototypes` | No | `False` | Sample prototypes randomly |
+| `-nc` | `--n-clonotypes` | No | all available | Number of clonotypes to process |
+| none | `--sample-random-clonotypes` | No | `False` | Sample clonotypes randomly |
+| `-s` | `--species` | No | `HomoSapiens` | Species for V/J gene alignment |
+| `-u` | `--unique-clonotypes` | No | `False` | Use only unique clonotypes |
+| `-r` | `--random-seed` | No | `42` | Random seed |
+| `-np` | `--nproc` | No | `1` | Number of worker processes |
+| `-llen` | `--lower-len-cdr3` | No | `5` | Minimum CDR3 length |
+| `-hlen` | `--higher-len-cdr3` | No | `30` | Maximum CDR3 length |
+| `-m` | `--metrics` | No | `dissimilarity` | TCRemP metric mode |
+| `-d` | `--save-dists` | No | `True` | Save TCRemP distances |
+| `-cl` | `--cluster` | No | `True` | Run clustering in embedding workflow |
+| `-se` | `--sample-embedding` | No | none | Path to precomputed sample embeddings |
+| `-be` | `--background-embedding` | No | none | Path to precomputed background embeddings |
+| `--cluster-algo` | `--cluster-algo` | No | `vdbscan` | `vdbscan`, `leiden`, `hierarchical_leiden`, or `leiden_dbscan` |
+| `--n-bg-points` | `--n-bg-points` | No | all available | Limit background clonotypes to first N entries |
+| `-npc` | `--cluster-pc-components` | No | `50` | Number of PCA components before clustering |
+| `-ms` | `--cluster-min-samples` | No | `3` | Core-point threshold for clustering |
+| `-kn` | `--k-neighbors` | No | `4` | Number of neighbors in the KNN graph |
+| `-ekn` | `--eps-k-neighbors` | No | `4` | K-th neighbor used for eps estimation in `vdbscan` |
+| `--leiden-resolution` | `--leiden-resolution` | No | `1.0` | Leiden resolution parameter |
+| `--leiden-sub-resolution` | `--leiden-sub-resolution` | No | `1.0` | Subclustering resolution for `hierarchical_leiden` |
+| `--eps-estimation-based-on` | `--eps-estimation-based-on` | No | `sample` | Estimate eps from `sample`, `background`, or `all` |
+| `--vdbscan-sym-rule` | `--vdbscan-sym-rule` | No | `asymmetric` | Symmetrization rule: `asymmetric`, `min`, or `max` |
 
 ---
 
-## 📘 Reference
+## Reference
 
-> Vlasova et al., RedCEA: repertoire embeddings denoising clustering enrichment analysis, 2025 (in prep.)
+Vlasova et al., RedCEA: repertoire embeddings denoising clustering enrichment analysis, 2025, in preparation.
