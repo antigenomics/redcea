@@ -1,22 +1,22 @@
-# TCRemPNet: T-cell repertoire clustering and enrichment
+# RedCEA: Repertoire Embeddings Denoising Clustering Enrichment Analysis
 
-TCRemPNet is a pipeline for comparing immune repertoires using prototype-based TCR embeddings. It is based on the original TCRemP embedding method, but supports comparison between case/control samples (e.g., vaccinated vs baseline) and clustering clonotypes using distances in embedding space.
+RedCEA is a pipeline for comparing immune repertoires using prototype-based TCR embeddings. It builds on the original TCRemP embedding method, while adding denoising, clustering, and enrichment analysis for case/control repertoire comparisons.
 
 This repository contains command-line tools for:
 
 * Computing prototype-based embeddings for a case and background repertoire (`tcremp-run`)
 * Performing clustering using PCA + DBSCAN (`tcremp-cluster`)
-* Comparing cluster enrichment across conditions (`tcrempnet`)
+* Comparing cluster enrichment across conditions (`redcea`)
 
 ---
 
 ## 🛠 Installation
 
 ```bash
-git clone https://gitlab.aldan3.itm-rsmu.ru/isagroup/tcrempnet.git
-cd tcrempnet
-conda env create -n tcrempnet python=3.11
-conda activate tcrempnet
+git clone https://gitlab.aldan3.itm-rsmu.ru/isagroup/redcea.git
+cd redcea
+conda env create -n redcea python=3.11
+conda activate redcea
 pip install -e .
 ```
 
@@ -24,11 +24,11 @@ Ensure the `mirpy` library is installed and importable.
 
 ---
 
-## 🚀 Running TCRemPNet
+## 🚀 Running RedCEA
 
 ### Option 1: Two-step execution (embedding + enrichment separately)
 
-💡 **Tip:** If you're planning to use the same background repertoire for multiple case samples (e.g., comparing several patient samples against a shared healthy baseline), it's highly recommended to compute and save background embeddings once using `tcremp-run`, and reuse them in all downstream `tcrempnet` runs. This significantly reduces runtime and avoids redundant computations.
+💡 **Tip:** If you're planning to use the same background repertoire for multiple case samples (e.g., comparing several patient samples against a shared healthy baseline), it's highly recommended to compute and save background embeddings once using `tcremp-run`, and reuse them in all downstream `redcea` runs. This significantly reduces runtime and avoids redundant computations.
 
 #### Step 1: Compute embeddings for each sample using `tcremp-run`
 
@@ -45,10 +45,10 @@ This produces:
 
 ⚠️ Embedding is resource-intensive. For large samples (100,000+ clonotypes), allow up to 8 hours on 48 CPUs.
 
-#### Step 2: Run `tcrempnet` on saved embeddings
+#### Step 2: Run `redcea` on saved embeddings
 
 ```bash
-tcrempnet \
+redcea \
   -is /projects/immunestatus/airr_format/sample.tsv \
   -ib /projects/immunestatus/airr_format/background.tsv \
   -c TRB -o ./results -np 4
@@ -63,7 +63,7 @@ tcrempnet \
 ### Option 2: End-to-end pipeline
 
 ```bash
-tcrempnet \
+redcea \
   -is sample.tsv \
   -ib background.tsv \
   -c TRB \
@@ -80,7 +80,7 @@ Embeddings for both case/control are computed internally.
 | CLI Tool         | Description                                        |
 | ---------------- | -------------------------------------------------- |
 | `tcremp-run`     | Computes TCRemP embeddings and optional clustering |
-| `tcrempnet`      | Performs embedding, clustering, and enrichment     |
+| `redcea`         | Performs embedding, clustering, and enrichment     |
 | `tcremp-cluster` | Clusters existing embeddings via PCA + DBSCAN      |
 
 ---
@@ -88,10 +88,10 @@ Embeddings for both case/control are computed internally.
 ## 🧪 Example: Yellow Fever Dataset
 
 ```bash
-tcrempnet \
+redcea \
   --sample /projects/immunestatus/pogorelyy/airr_format/yfv_day_15.txt \
   --background /projects/immunestatus/pogorelyy/airr_format/yfv_day_0.txt \
-  --output /projects/immunestatus/pogorelyy/tcrempnet/yfv_res \
+  --output /projects/immunestatus/pogorelyy/redcea/yfv_res \
   --chain TRB \
   --prefix yfv_result \
   -np 16
@@ -117,20 +117,20 @@ Depending on the mode, the pipeline outputs:
 
 ## 📎 SLURM job example
 
-> Make sure you have activated the `tcrempnet` environment **before** submitting slurm jobs.
+> Make sure you have activated the `redcea` environment **before** submitting slurm jobs.
 
 
 ### Full pipeline
 
 ```bash
 #!/bin/sh
-#SBATCH --job-name=tcrempnet
+#SBATCH --job-name=redcea
 #SBATCH --cpus-per-task=48
 #SBATCH --mem=128gb
 #SBATCH --time=08:00:00
-#SBATCH --output=tcrempnet_run.%j.log
+#SBATCH --output=redcea_run.%j.log
 
-tcrempnet \
+redcea \
   -is case.tsv \
   -ib control.tsv \
   -c TRB \
@@ -187,4 +187,4 @@ tcremp-run \
 
 ## 📘 Reference
 
-> Vlasova et al., TCRemPNet: vector-based clustering of immune repertoires with enrichment test, 2025 (in prep.)
+> Vlasova et al., RedCEA: repertoire embeddings denoising clustering enrichment analysis, 2025 (in prep.)
