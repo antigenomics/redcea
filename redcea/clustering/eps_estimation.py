@@ -169,7 +169,7 @@ def build_cdr3_groups_from_data(
         - len_to_gid: mapping of length -> group id
         - gid: group id per point
     """
-    from tcremp.clustering.cdr3_grouping import (
+    from redcea.clustering.cdr3_grouping import (
         build_len_to_group_id, map_len_to_group_id
     )
     
