@@ -128,7 +128,7 @@ mkdir -p "${OUT}"
 
 log_status "START    job=${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID} ep=${EPITOPE} algo=leiden chain=${CHAIN} tn=${TN} kn=${KN} lr=${LR} out=${OUT}"
 
-CMD=(python /home/evlasova/tcrempnet/tcremp/tcrempnet.py
+CMD=(python -m redcea.redcea
   --sample "${SAMPLE}"
   --background "${BACKGROUND}"
   --output "${OUT}"

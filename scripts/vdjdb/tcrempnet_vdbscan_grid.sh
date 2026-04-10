@@ -57,9 +57,6 @@ CHAIN="TRB"
 NPROC=16
 N_BG_POINTS=100000
 
-# Code location (absolute path, avoids wrong cwd issues)
-TCREMPNET_PY="/home/evlasova/tcrempnet/tcremp/tcrempnet.py"
-
 # Base output prefix (your old naming style)
 BASE_OUT="/projects/immunestatus/vdjdb/tcrempnet_YLQPRTFLL_trb_vdbscan"
 
@@ -115,7 +112,7 @@ echo "==================="
 # =========================
 # Build command (vdbscan only)
 # =========================
-CMD=(python "${TCREMPNET_PY}"
+CMD=(python -m redcea.redcea
   --sample "${SAMPLE}"
   --background "${BACKGROUND}"
   --output "${OUT}"

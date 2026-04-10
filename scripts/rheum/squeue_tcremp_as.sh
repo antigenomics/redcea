@@ -11,7 +11,7 @@
 #SBATCH --partition=short
 
 
-python tcremp_run.py \
+tcremp-run \
   --input /projects/immunestatus/rheum/airr_format/as_Mikh_SFCD8.tsv \
   --output /projects/immunestatus/test \
   --chain TRB \
