@@ -11,7 +11,7 @@
 #SBATCH --partition=long
 
 
-python /home/evlasova/tcrempnet/tcremp/tcrempnet.py \
+python -m redcea.redcea \
     -is /projects/immunestatus/rheum/airr_format/as_Shep_PB_F.tsv \
     -ib /projects/immunestatus/rheum/airr_format/joint_hd_b27pos.tsv \
     -c TRB -o /projects/immunestatus/rheum/tcrempnet_Shep_b27pos_hdbscan -np 16 \

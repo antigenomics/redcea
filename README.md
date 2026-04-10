@@ -38,8 +38,9 @@ python -m pip install -e .[test]
 
 This installs:
 
-* the package in editable mode
-* CLI entry points `redcea`, `tcrempnet`, `tcremp-run`, `tcremp-cluster`
+* the `redcea` package in editable mode
+* the RedCEA CLI entry points `redcea` and `tcrempnet`
+* the `tcremp` dependency, which provides `tcremp-run` and `tcremp-cluster`
 * test dependencies including `pytest`
 
 Notes:
@@ -72,7 +73,7 @@ pytest -q
 Expected result:
 
 * imports succeed without `ModuleNotFoundError`
-* CLI help is printed for both commands
+* CLI help is printed for the requested commands
 * tests pass
 
 Important limitation:

@@ -11,7 +11,7 @@
 #SBATCH --partition=medium
 
 
-python tcremp_run.py \
+tcremp-run \
   --input /projects/immunestatus/pogorelyy/airr_format/P1_0_F1_with_1.txt \
   --output /projects/immunestatus/test \
   --chain TRB \

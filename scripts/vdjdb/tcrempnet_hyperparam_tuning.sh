@@ -142,7 +142,7 @@ echo "==================="
 # =========================
 # Build command
 # =========================
-CMD=(python /home/evlasova/tcrempnet/tcremp/tcrempnet.py
+CMD=(python -m redcea.redcea
   --sample "${SAMPLE}"
   --background "${BACKGROUND}"
   --output "${OUT}"

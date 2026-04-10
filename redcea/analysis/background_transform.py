@@ -147,7 +147,11 @@ class BackgroundTransform:
             self.fit_umap()
         return self
 
-    def transform(self, embeddings: pd.DataFrame | np.ndarray, with_umap: bool = False) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    def transform(
+        self,
+        embeddings: pd.DataFrame | np.ndarray,
+        with_umap: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         embeddings_pca = self.transform_pca(embeddings)
         if not with_umap:
             return embeddings_pca

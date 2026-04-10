@@ -7,8 +7,13 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from redcea.config import PipelineConfig
+
 from .preprocess import standardize_data, apply_pca
 from .eps_estimation import estimate_dbscan_eps, cluster_dbscan
+from .cdr3_grouping import compute_cdr3_len, build_len_to_group_id, map_len_to_group_id
+from .eps_estimation import estimate_eps_by_group_from_sample, eps_per_point_from_group_id, estimate_eps_by_group_flexible
+from .vdbscan import vdbscan_from_knn
 
 
 # --- optional dependency: networkit ---
@@ -331,3 +336,139 @@ def hierarchical_leiden_dbscan_clustering(
             offset += int(labels_local.max()) + 1
 
     return final_labels
+
+
+def _pick_cdr3_column(joint_representations: pd.DataFrame) -> str:
+    if "cdr3aa_beta" in joint_representations.columns:
+        return "cdr3aa_beta"
+    if "cdr3aa_alpha" in joint_representations.columns:
+        return "cdr3aa_alpha"
+    if "cdr3aa" in joint_representations.columns:
+        return "cdr3aa"
+    raise ValueError(
+        "Cannot find CDR3 AA column in representations. "
+        "Expected one of: cdr3aa_beta, cdr3aa_alpha, cdr3aa"
+    )
+
+
+def _estimate_vdbscan_group_assignments(
+    *,
+    config: PipelineConfig,
+    joint_representations: pd.DataFrame,
+    sample_representations: pd.DataFrame,
+    background_representations: pd.DataFrame,
+    knn,
+):
+    cdr3_col = _pick_cdr3_column(joint_representations)
+    eps_estimation_based_on = config.eps_estimation_based_on
+    kth_neighbor_for_eps = config.eps_k_neighbors
+
+    if eps_estimation_based_on == "sample":
+        logging.info("Running vDBSCAN (eps-by-group from SAMPLE only; L2 distances)")
+        sample_len = compute_cdr3_len(sample_representations[cdr3_col])
+        len_to_gid = build_len_to_group_id(sample_len, min_frac=0.05)
+
+        sample_gid = map_len_to_group_id(sample_len, len_to_gid, unknown_len_policy="nearest")
+        bg_len = compute_cdr3_len(background_representations[cdr3_col])
+        bg_gid = map_len_to_group_id(bg_len, len_to_gid, unknown_len_policy="nearest")
+
+        eps_by_gid = estimate_eps_by_group_from_sample(
+            sample_group_id=sample_gid,
+            sample_ss_distances_l2=knn.dist_ss,
+            kth_neighbor=int(kth_neighbor_for_eps),
+        )
+        gid_all = pd.concat([pd.Series(sample_gid), pd.Series(bg_gid)], ignore_index=True).to_numpy(dtype="int32")
+        return gid_all, eps_by_gid
+    if eps_estimation_based_on == "background":
+        logging.info("Running vDBSCAN (eps-by-group from BACKGROUND only; L2 distances)")
+        bg_len = compute_cdr3_len(background_representations[cdr3_col])
+        len_to_gid = build_len_to_group_id(bg_len, min_frac=0.05)
+
+        bg_gid = map_len_to_group_id(bg_len, len_to_gid, unknown_len_policy="nearest")
+        sample_len = compute_cdr3_len(sample_representations[cdr3_col])
+        sample_gid = map_len_to_group_id(sample_len, len_to_gid, unknown_len_policy="nearest")
+
+        eps_by_gid = estimate_eps_by_group_from_sample(
+            sample_group_id=bg_gid,
+            sample_ss_distances_l2=knn.dist_bb,
+            kth_neighbor=int(kth_neighbor_for_eps),
+        )
+        gid_all = pd.concat([pd.Series(sample_gid), pd.Series(bg_gid)], ignore_index=True).to_numpy(dtype="int32")
+        return gid_all, eps_by_gid
+    if eps_estimation_based_on == "all":
+        logging.info("Running vDBSCAN (eps-by-group from SAMPLE+BACKGROUND combined; L2 distances)")
+        joint_len = compute_cdr3_len(joint_representations[cdr3_col])
+        len_to_gid = build_len_to_group_id(joint_len, min_frac=0.05)
+
+        gid_all = map_len_to_group_id(joint_len, len_to_gid, unknown_len_policy="nearest")
+        eps_by_gid = estimate_eps_by_group_flexible(
+            group_id=gid_all,
+            dist_matrix=knn.distances,
+            kth_neighbor=int(kth_neighbor_for_eps),
+        )
+        return gid_all, eps_by_gid
+
+    raise ValueError(
+        f"Unknown eps_estimation_based_on='{eps_estimation_based_on}'. "
+        "Expected one of: sample, background, all"
+    )
+
+
+def run_joint_clustering(
+    *,
+    config: PipelineConfig,
+    joint_representations: pd.DataFrame,
+    sample_representations: pd.DataFrame,
+    background_representations: pd.DataFrame,
+    knn,
+):
+    if config.cluster_algo == "leiden_dbscan":
+        return hierarchical_leiden_dbscan_clustering(
+            data_reduced=knn.data_reduced,
+            knn_indices=knn.indices,
+            knn_distances=knn.distances,
+            resolution=config.leiden_resolution,
+            k_neighbors=config.eps_k_neighbors,
+            num_points_for_core=config.cluster_min_samples,
+            n_jobs=config.normalized_nproc,
+        )
+    if config.cluster_algo == "hierarchical_leiden":
+        return hierarchical_leiden_clustering(
+            knn_indices=knn.indices,
+            knn_distances=knn.distances,
+            base_resolution=config.leiden_resolution,
+            sub_resolution=config.leiden_sub_resolution,
+            n_iterations=3,
+            n_threads=config.normalized_nproc,
+            metric="dissimilarity",
+            min_cluster_size=5,
+            sub_min_cluster_size=3,
+        )
+    if config.cluster_algo == "leiden":
+        return run_leiden_clustering(
+            knn_indices=knn.indices,
+            knn_distances=knn.distances,
+            resolution=config.leiden_resolution,
+            n_jobs=config.normalized_nproc,
+        )
+    if config.cluster_algo == "vdbscan":
+        gid_all, eps_by_gid = _estimate_vdbscan_group_assignments(
+            config=config,
+            joint_representations=joint_representations,
+            sample_representations=sample_representations,
+            background_representations=background_representations,
+            knn=knn,
+        )
+        eps_i_all = eps_per_point_from_group_id(gid_all, eps_by_gid)
+        return vdbscan_from_knn(
+            knn_indices=knn.indices,
+            knn_distances_l2=knn.distances,
+            eps_i_l2=eps_i_all,
+            num_points_for_core=config.cluster_min_samples,
+            sym_rule=config.vdbscan_sym_rule,
+        )
+
+    raise ValueError(
+        f"Unknown cluster_algo='{config.cluster_algo}'. "
+        "Expected one of: leiden_dbscan, hierarchical_leiden, leiden, vdbscan"
+    )

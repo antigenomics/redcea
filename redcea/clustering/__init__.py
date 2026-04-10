@@ -22,6 +22,7 @@ from .faiss_cache import (
 )
 
 from .knn_merge import build_joint_knn_from_split
+from .joint_knn import JointKnnArtifacts, build_joint_knn_artifacts
 
 from .vdbscan import vdbscan_from_knn
 
@@ -30,6 +31,7 @@ from .pipeline_joint import run_joint_vdbscan
 from .cluster_methods import (
     run_dbscan_clustering,
     run_leiden_clustering,
+    run_joint_clustering,
     hierarchical_leiden_clustering,
     hierarchical_leiden_dbscan_clustering,
 )
@@ -58,6 +60,8 @@ __all__ = [
 
     # knn merge
     "build_joint_knn_from_split",
+    "JointKnnArtifacts",
+    "build_joint_knn_artifacts",
 
     # vdbscan
     "vdbscan_from_knn",
@@ -66,6 +70,7 @@ __all__ = [
     # classic methods
     "run_dbscan_clustering",
     "run_leiden_clustering",
+    "run_joint_clustering",
     "hierarchical_leiden_clustering",
     "hierarchical_leiden_dbscan_clustering",
 ]

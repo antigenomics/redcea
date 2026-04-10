@@ -3,12 +3,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from redcea.utils import (
-    _fdr_bh,
-    add_log_fold_change,
-    add_z_binom_pvalues,
-    resolve_embedding_file,
-)
+from redcea.utils.paths import resolve_embedding_file
+from redcea.utils.stats import _fdr_bh, add_log_fold_change, add_z_binom_pvalues
 
 
 def test_fdr_bh_returns_monotone_qvalues_in_original_order():

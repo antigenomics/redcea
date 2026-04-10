@@ -11,7 +11,7 @@
 #SBATCH --partition=short
 
 
-python tcremp_cluster.py \
+tcremp-cluster \
   --input /projects/immunestatus/rheum/tcremp/hd_TwHM2_PB_F_embeddings.parquet \
   --output /projects/immunestatus/test/test.csv \
   --kth_neighbor 4

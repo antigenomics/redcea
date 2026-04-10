@@ -38,64 +38,70 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
     fake_segments_module = types.SimpleNamespace(
         SegmentLibrary=types.SimpleNamespace(load_default=lambda genes, organisms: object())
     )
+    fake_tcremp_run_module = types.SimpleNamespace(run_tcremp_embedding=lambda *args, **kwargs: None)
+    fake_tcremp_module = types.ModuleType("tcremp")
+    fake_tcremp_module.tcremp_run = fake_tcremp_run_module
 
     monkeypatch.setitem(sys.modules, "faiss", fake_faiss)
     monkeypatch.setitem(sys.modules, "mir", types.ModuleType("mir"))
     monkeypatch.setitem(sys.modules, "mir.common", types.ModuleType("mir.common"))
     monkeypatch.setitem(sys.modules, "mir.common.segments", fake_segments_module)
+    monkeypatch.setitem(sys.modules, "tcremp", fake_tcremp_module)
+    monkeypatch.setitem(sys.modules, "tcremp.tcremp_run", fake_tcremp_run_module)
 
-    import redcea.redcea as pipeline
+    import redcea.analysis.io as analysis_io
+    import redcea.embeddings as embeddings
+    import redcea.pipeline as pipeline
 
+    analysis_io = importlib.reload(analysis_io)
+    embeddings = importlib.reload(embeddings)
     pipeline = importlib.reload(pipeline)
-
-    monkeypatch.setattr(
-        pipeline,
-        "get_arguments_enrich",
-        lambda: Namespace(
-            sample=str(sample_path),
-            background=str(background_path),
-            output=str(tmp_path / "out"),
-            prefix="demo",
-            index_col=None,
-            chain="TRB",
-            prototypes_path=None,
-            n_prototypes=None,
-            sample_random_prototypes=False,
-            n_clonotypes=None,
-            sample_random_clonotypes=False,
-            species="HomoSapiens",
-            random_seed=42,
-            nproc=1,
-            lower_len_cdr3=5,
-            higher_len_cdr3=30,
-            metrics="dissimilarity",
-            sample_embedding=None,
-            background_embedding=None,
-            cluster_algo="leiden",
-            n_bg_points=None,
-            cluster_pc_components=2,
-            cluster_min_samples=1,
-            k_neighbors=2,
-            eps_k_neighbors=2,
-            leiden_resolution=1.0,
-            leiden_sub_resolution=1.0,
-            eps_estimation_based_on="sample",
-            vdbscan_sym_rule="asymmetric",
-        ),
+    args = Namespace(
+        sample=str(sample_path),
+        background=str(background_path),
+        output=str(tmp_path / "out"),
+        prefix="demo",
+        index_col=None,
+        chain="TRB",
+        prototypes_path=None,
+        n_prototypes=None,
+        sample_random_prototypes=False,
+        n_clonotypes=None,
+        sample_random_clonotypes=False,
+        species="HomoSapiens",
+        random_seed=42,
+        nproc=1,
+        lower_len_cdr3=5,
+        higher_len_cdr3=30,
+        metrics="dissimilarity",
+        sample_embedding=None,
+        background_embedding=None,
+        cluster_algo="leiden",
+        n_bg_points=None,
+        cluster_pc_components=2,
+        cluster_min_samples=1,
+        k_neighbors=2,
+        eps_k_neighbors=2,
+        leiden_resolution=1.0,
+        leiden_sub_resolution=1.0,
+        eps_estimation_based_on="sample",
+        vdbscan_sym_rule="asymmetric",
     )
 
     monkeypatch.setattr(pipeline, "configure_logging", lambda *args, **kwargs: None)
     monkeypatch.setattr(pipeline, "log_memory_usage", lambda *args, **kwargs: None)
     monkeypatch.setattr(pipeline, "resolve_prototype_file", lambda *args, **kwargs: "fake_prototypes.tsv")
-    monkeypatch.setattr(pipeline, "load_prototype_repertoire", lambda *args, **kwargs: types.SimpleNamespace(total=2))
-    monkeypatch.setattr(pipeline, "subsample_repertoire", lambda rep, *args, **kwargs: rep)
+    monkeypatch.setattr(embeddings, "load_prototype_repertoire", lambda *args, **kwargs: types.SimpleNamespace(total=2))
+    monkeypatch.setattr(embeddings, "subsample_repertoire", lambda rep, *args, **kwargs: rep)
+    monkeypatch.setattr(analysis_io, "subsample_repertoire", lambda rep, *args, **kwargs: rep)
 
     def fake_load_analysis_repertoire(path, *args, **kwargs):
         if Path(path).name == "sample.tsv":
             return _FakeRepertoire([0, 1, 2])
         return _FakeRepertoire([10, 11])
 
-    monkeypatch.setattr(pipeline, "load_analysis_repertoire", fake_load_analysis_repertoire)
+    monkeypatch.setattr(embeddings, "load_analysis_repertoire", fake_load_analysis_repertoire)
+    monkeypatch.setattr(analysis_io, "load_analysis_repertoire", fake_load_analysis_repertoire)
 
     def fake_get_representations_df(rep, locus=None):
         return pd.DataFrame(
@@ -107,7 +113,7 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
             }
         )
 
-    monkeypatch.setattr(pipeline, "get_representations_df", fake_get_representations_df)
+    monkeypatch.setattr(analysis_io, "get_representations_df", fake_get_representations_df)
 
     def fake_run_tcremp_embedding(rep, proto, lib, chain, metrics, nproc):
         rows = []
@@ -124,47 +130,23 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
             )
         return pd.DataFrame(rows)
 
-    monkeypatch.setattr(pipeline, "run_tcremp_embedding", fake_run_tcremp_embedding)
-    monkeypatch.setattr(pipeline, "prepare_data_for_clustering", lambda df, n_components: df.to_numpy())
-
-    def fake_compute_blockwise_knn_merged(**kwargs):
-        dist_ss = np.array([[0.0, 0.3], [0.0, 0.2], [0.0, 0.4]], dtype="float32")
-        ind_ss = np.array([[0, 1], [1, 0], [2, 1]], dtype="int32")
-        dist_bb = np.array([[0.0, 0.5], [0.0, 0.6]], dtype="float32")
-        ind_bb = np.array([[0, 1], [1, 0]], dtype="int32")
-        dist_sb = np.array([[0.25, 0.35], [0.22, 0.45], [0.28, 0.48]], dtype="float32")
-        ind_sb = np.array([[0, 1], [0, 1], [1, 0]], dtype="int32")
-        dist_bs = np.array([[0.18, 0.31], [0.19, 0.29]], dtype="float32")
-        ind_bs = np.array([[1, 0], [2, 1]], dtype="int32")
-        return dist_ss, ind_ss, dist_bb, ind_bb, dist_sb, ind_sb, dist_bs, ind_bs
-
-    monkeypatch.setattr(pipeline, "compute_blockwise_knn_merged", fake_compute_blockwise_knn_merged)
-
-    def fake_build_joint_knn_from_split(**kwargs):
-        distances = np.array(
-            [
-                [0.0, 0.25],
-                [0.0, 0.22],
-                [0.0, 0.28],
-                [0.0, 0.18],
-                [0.0, 0.19],
-            ],
-            dtype="float32",
-        )
-        indices = np.array(
-            [
-                [0, 3],
-                [1, 3],
-                [2, 4],
-                [3, 1],
-                [4, 2],
-            ],
-            dtype="int32",
-        )
-        return distances, indices
-
-    monkeypatch.setattr(pipeline, "build_joint_knn_from_split", fake_build_joint_knn_from_split)
-    monkeypatch.setattr(pipeline, "run_leiden_clustering", lambda **kwargs: np.array([0, 0, 1, 0, 1], dtype="int32"))
+    monkeypatch.setattr(embeddings, "run_tcremp_embedding", fake_run_tcremp_embedding)
+    monkeypatch.setattr(
+        pipeline,
+        "build_joint_knn_artifacts",
+        lambda **kwargs: types.SimpleNamespace(
+            data_reduced=np.zeros((5, 2), dtype="float32"),
+            distances=np.zeros((5, 2), dtype="float32"),
+            indices=np.zeros((5, 2), dtype="int32"),
+            dist_ss=np.zeros((3, 2), dtype="float32"),
+            dist_bb=np.zeros((2, 2), dtype="float32"),
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "run_joint_clustering",
+        lambda **kwargs: np.array([0, 0, 1, 0, 1], dtype="int32"),
+    )
 
     def fake_to_parquet(self, path, *args, **kwargs):
         return self.to_pickle(path)
@@ -172,7 +154,7 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
     monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet, raising=True)
     monkeypatch.setattr(pd, "read_parquet", lambda path, *args, **kwargs: pd.read_pickle(path))
 
-    pipeline.main()
+    artifacts = pipeline.run_redcea_pipeline(args)
 
     out_dir = tmp_path / "out"
     clusters_path = out_dir / "demo_tcremp_clusters.tsv"
@@ -191,6 +173,7 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
     summary = pd.read_csv(summary_path, sep="\t")
     enriched = pd.read_csv(enriched_path, sep="\t")
 
+    assert not artifacts.summary_df.empty
     assert set(clusters["source"]) == {"sample", "background"}
     assert {"cluster_id", "cluster_size", "sample", "background", "log_fold_change"} <= set(summary.columns)
     assert not enriched.empty

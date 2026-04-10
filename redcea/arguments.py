@@ -121,36 +121,6 @@ def add_redcea_pipeline_args(parser: argparse.ArgumentParser) -> argparse.Argume
     )
     return parser
 
-
-def add_vdjdb_cluster_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    parser.add_argument("--vdjdb", required=True, help="Path to vdjdb_full.txt-like file.")
-    parser.add_argument("--background-airr", required=True, help="Path to background AIRR file.")
-    parser.add_argument(
-        "--epitopes",
-        nargs="*",
-        default=None,
-        help="Optional list of epitopes to process. By default all epitopes are processed.",
-    )
-    parser.add_argument(
-        "--min-epitope-clonotypes",
-        type=int,
-        default=None,
-        help="Optional minimum number of clonotypes required for an epitope to be processed.",
-    )
-    return parser
-
-
-def build_general_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="RedCEA pipeline implementation")
-    parser.add_argument("-i", "--input", type=str, required=True, help="Path to input file.")
-    parser.add_argument("-o", "--output", type=str, required=True, help="Path to the output folder.")
-    parser.add_argument("-e", "--prefix", type=str, help="Output prefix.")
-    parser.add_argument("-x", "--index-col", type=str, help="Input ID column name.")
-    add_common_embedding_args(parser)
-    add_redcea_pipeline_args(parser)
-    return parser
-
-
 def build_enrich_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="RedCEA sample-vs-background clustering pipeline")
     add_enrich_io_args(parser)
@@ -159,39 +129,5 @@ def build_enrich_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_vdjdb_cluster_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="VDJdb wrapper for per-epitope Leiden clustering")
-    add_vdjdb_cluster_args(parser)
-    parser.add_argument("-o", "--output", type=str, required=True, help="Path to the output folder.")
-    parser.add_argument("-e", "--prefix", type=str, help="Optional output prefix override.")
-    parser.add_argument("-x", "--index-col", type=str, help="Optional mapping column for AIRR parsing.")
-    add_common_embedding_args(parser)
-    add_redcea_pipeline_args(parser)
-    parser.set_defaults(
-        cluster_algo="leiden",
-        index_col=None,
-        background=None,
-        sample=None,
-        n_prototypes=None,
-        sample_random_prototypes=False,
-        n_clonotypes=None,
-        sample_random_clonotypes=False,
-        unique_clonotypes=False,
-        n_bg_points=None,
-        leiden_sub_resolution=1.0,
-        eps_estimation_based_on="sample",
-        vdbscan_sym_rule="asymmetric",
-    )
-    return parser
-
-
-def get_arguments(args=None):
-    return build_general_parser().parse_args(args)
-
-
 def get_arguments_enrich(args=None):
     return build_enrich_parser().parse_args(args)
-
-
-def get_arguments_vdjdb_clusters(args=None):
-    return build_vdjdb_cluster_parser().parse_args(args)
