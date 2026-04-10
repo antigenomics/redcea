@@ -21,7 +21,7 @@ keywords = ["antigen", "antibody", "t-cell", "receptor", "sequence", "embedding"
 requires-python = ">=3.10"
 dependencies = [
   "tcremp>=0.0.1",
-  "mir@git+https://github.com/antigenomics/mirpy.git@0.1.2-mirpy-fastAlign",
+  "mir@git+https://github.com/antigenomics/mirpy.git@0.1.3-mirpy-2026",
   "numpy==2.3.5",
   "scipy==1.16.3",
   "pandas",
