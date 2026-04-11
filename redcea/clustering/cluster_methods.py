@@ -128,6 +128,7 @@ def run_leiden_clustering(
     metric: str = "dissimilarity",
     max_distance: float | None = None,
     min_cluster_size: int | None = None,
+    min_cluster_size_mask: np.ndarray | None = None,
     # compatibility alias used in some call-sites
     n_jobs: Optional[int] = None,
 ) -> np.ndarray:
@@ -167,11 +168,23 @@ def run_leiden_clustering(
 
     logging.info(f"Leiden finished: clusters={part.numberOfSubsets()}, labels shape={labels.shape}")
 
+    if min_cluster_size_mask is not None:
+        min_cluster_size_mask = np.asarray(min_cluster_size_mask, dtype=bool)
+        if min_cluster_size_mask.shape != labels.shape:
+            raise ValueError(
+                "min_cluster_size_mask must have the same shape as labels: "
+                f"expected {labels.shape}, got {min_cluster_size_mask.shape}"
+            )
+
     if min_cluster_size is not None and int(min_cluster_size) > 1:
-        uniq, counts = np.unique(labels, return_counts=True)
+        labels_for_counting = labels if min_cluster_size_mask is None else labels[min_cluster_size_mask]
+        uniq, counts = np.unique(labels_for_counting, return_counts=True)
         small = set(uniq[counts < int(min_cluster_size)])
         if small:
-            logging.info(f"Marking {len(small)} small clusters (size < {min_cluster_size}) as noise (-1).")
+            scope = "using masked membership counts" if min_cluster_size_mask is not None else "globally"
+            logging.info(
+                f"Marking {len(small)} small clusters (size < {min_cluster_size}) as noise (-1), {scope}."
+            )
             mask = np.isin(labels, list(small))
             labels[mask] = -1
 
@@ -188,6 +201,7 @@ def hierarchical_leiden_clustering(
     n_iterations: int = 3,
     n_threads: int = 8,
     metric: str = "dissimilarity",
+    min_cluster_size_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Two-level Leiden clustering (Seurat-like):
@@ -206,6 +220,7 @@ def hierarchical_leiden_clustering(
         n_threads=n_threads,
         metric=metric,
         min_cluster_size=min_cluster_size,
+        min_cluster_size_mask=min_cluster_size_mask,
     )
 
     final_labels = np.array(global_labels, copy=True)
@@ -217,12 +232,22 @@ def hierarchical_leiden_clustering(
     for cl in uniq_clusters:
         idx = np.where(global_labels == cl)[0]
         size = int(len(idx))
+        sample_size = (
+            int(np.count_nonzero(min_cluster_size_mask[idx]))
+            if min_cluster_size_mask is not None
+            else size
+        )
 
-        if size < 2 * int(sub_min_cluster_size):
-            logging.info(f"[HL] Cluster {cl}: size {size}, too small for subdivision -> keep as is.")
+        if sample_size < 2 * int(sub_min_cluster_size):
+            logging.info(
+                f"[HL] Cluster {cl}: size {size}, sample_size {sample_size}, too small for subdivision -> keep as is."
+            )
             continue
 
-        logging.info(f"[HL] Subclustering cluster {cl} (size={size}) with resolution={sub_resolution}")
+        logging.info(
+            f"[HL] Subclustering cluster {cl} (size={size}, sample_size={sample_size}) "
+            f"with resolution={sub_resolution}"
+        )
 
         sub_indices = knn_indices[idx]
         sub_distances = knn_distances[idx]
@@ -240,6 +265,7 @@ def hierarchical_leiden_clustering(
             n_threads=n_threads,
             metric=metric,
             min_cluster_size=sub_min_cluster_size,
+            min_cluster_size_mask=min_cluster_size_mask[idx] if min_cluster_size_mask is not None else None,
         )
 
         if len(np.unique(sub_labels[sub_labels >= 0])) <= 1:
@@ -422,6 +448,9 @@ def run_joint_clustering(
     background_representations: pd.DataFrame,
     knn,
 ):
+    sample_mask = np.zeros(len(joint_representations), dtype=bool)
+    sample_mask[: len(sample_representations)] = True
+
     if config.cluster_algo == "leiden_dbscan":
         return hierarchical_leiden_dbscan_clustering(
             data_reduced=knn.data_reduced,
@@ -443,6 +472,7 @@ def run_joint_clustering(
             metric="dissimilarity",
             min_cluster_size=5,
             sub_min_cluster_size=3,
+            min_cluster_size_mask=sample_mask,
         )
     if config.cluster_algo == "leiden":
         return run_leiden_clustering(
@@ -450,6 +480,8 @@ def run_joint_clustering(
             knn_distances=knn.distances,
             resolution=config.leiden_resolution,
             n_jobs=config.normalized_nproc,
+            min_cluster_size=config.cluster_min_samples,
+            min_cluster_size_mask=sample_mask,
         )
     if config.cluster_algo == "vdbscan":
         gid_all, eps_by_gid = _estimate_vdbscan_group_assignments(
