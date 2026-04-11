@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from redcea.utils.paths import resolve_embedding_file
+from redcea.utils.paths import resolve_embedding_file, resolve_index_file
 from redcea.utils.tcremp import get_representations_df, load_analysis_repertoire, subsample_repertoire
 
 
@@ -16,7 +16,13 @@ class EmbeddingArtifacts:
     embeddings: pd.DataFrame
     representations: pd.DataFrame
     ids: pd.Series
-    cache_path: Path
+    embedding_path: Path
+    index_path: Path
+
+    @property
+    def cache_path(self) -> Path:
+        """Backward-compatible alias for the FAISS index location."""
+        return self.index_path
 
 
 @dataclass
@@ -87,7 +93,8 @@ def load_embedding_artifacts(path, args, is_sample, lib, locus, prefix, output_p
         embeddings=emb,
         representations=rep_df,
         ids=ids,
-        cache_path=Path(emb_path),
+        embedding_path=Path(emb_path),
+        index_path=resolve_index_file(emb_path),
     )
 
 

@@ -24,3 +24,8 @@ def resolve_embedding_file(
     if must_exist and not path.exists():
         raise FileNotFoundError(f"Embedding file for '{tag}' not found: {path}")
     return path
+
+
+def resolve_index_file(embedding_path: str | Path) -> Path:
+    path = Path(embedding_path)
+    return path.with_suffix(".index")
