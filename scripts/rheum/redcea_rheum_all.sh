@@ -7,8 +7,8 @@ EMB_DIR="/projects/immunestatus/rheum/tcremp"
 OUT_DIR="/projects/immunestatus/rheum/redcea"
 RUNS_DIR="$OUT_DIR/runs"
 
-BACKGROUND_FILE="$AIRR_DIR/joint_hd_b27_pos.tsv"
-BACKGROUND_EMB="$EMB_DIR/joint_hd_b27_pos_embeddings.parquet"
+BACKGROUND_FILE="$AIRR_DIR/joint_hd_b27pos.tsv"
+BACKGROUND_EMB="$EMB_DIR/joint_hd_b27pos_embeddings.parquet"
 
 samples=(
   as_Abd_PB_F

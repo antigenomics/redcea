@@ -6,7 +6,7 @@ AIRR_DIR="/projects/immunestatus/rheum/airr_format"
 OUT_DIR="/projects/immunestatus/rheum/tcremp"
 LOG_DIR="$OUT_DIR/logs"
 
-BACKGROUND_FILE="$AIRR_DIR/joint_hd_b27_pos.tsv"
+BACKGROUND_FILE="$AIRR_DIR/joint_hd_b27pos.tsv"
 
 CPUS_PER_TASK=64
 MEMORY="128gb"
