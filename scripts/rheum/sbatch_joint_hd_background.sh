@@ -3,24 +3,24 @@
 set -euo pipefail
 
 AIRR_DIR="/projects/immunestatus/rheum/airr_format"
-OUT_DIR="/projects/immunestatus/rheum/redcea"
+OUT_DIR="/projects/immunestatus/rheum/tcremp"
 LOG_DIR="$OUT_DIR/logs"
 
-BACKGROUND_FILE="$AIRR_DIR/joint_hd.tsv"
+BACKGROUND_FILE="$AIRR_DIR/joint_hd_b27_pos.tsv"
 
-CPUS_PER_TASK=16
-MEMORY="32gb"
-TIME_LIMIT="01:00:00"
-PARTITION="medium"
+CPUS_PER_TASK=64
+MEMORY="128gb"
+TIME_LIMIT="02:00:00"
+PARTITION="short"
 CONSTRAINT="hpc"
-NPROC=16
+NPROC=64
 
 if [[ ! -f "$BACKGROUND_FILE" ]]; then
   echo "Background AIRR file not found: $BACKGROUND_FILE" >&2
   exit 1
 fi
 
-mkdir -p "$OUT_DIR" "$LOG_DIR" "$OUT_DIR/shared_embeddings/trb" "$OUT_DIR/shared_embeddings/tra"
+mkdir -p "$OUT_DIR" "$LOG_DIR"
 
 trb_job_id="$(
   sbatch --parsable <<EOF
@@ -34,25 +34,8 @@ trb_job_id="$(
 #SBATCH --partition=${PARTITION}
 
 set -euo pipefail
-tcremp-run -i $(printf '%q' "$BACKGROUND_FILE") -c TRB -o $(printf '%q' "$OUT_DIR/shared_embeddings/trb") -np ${NPROC}
-EOF
-)"
-
-tra_job_id="$(
-  sbatch --parsable <<EOF
-#!/bin/bash
-#SBATCH --job-name=rheum_joint_hd_tra
-#SBATCH --cpus-per-task=${CPUS_PER_TASK}
-#SBATCH --mem=${MEMORY}
-#SBATCH --time=${TIME_LIMIT}
-#SBATCH --output=${LOG_DIR}/joint_hd.tra.%j.log
-#SBATCH --constraint=${CONSTRAINT}
-#SBATCH --partition=${PARTITION}
-
-set -euo pipefail
-tcremp-run -i $(printf '%q' "$BACKGROUND_FILE") -c TRA -o $(printf '%q' "$OUT_DIR/shared_embeddings/tra") -np ${NPROC}
+tcremp-run -i $(printf '%q' "$BACKGROUND_FILE") -c TRB -o $(printf '%q' "$OUT_DIR") -np ${NPROC}
 EOF
 )"
 
 echo "Submitted TRB background job: $trb_job_id"
-echo "Submitted TRA background job: $tra_job_id"

@@ -3,12 +3,12 @@
 set -euo pipefail
 
 AIRR_DIR="/projects/immunestatus/rheum/airr_format"
+EMB_DIR="/projects/immunestatus/rheum/tcremp"
 OUT_DIR="/projects/immunestatus/rheum/redcea"
 RUNS_DIR="$OUT_DIR/runs"
-SHARED_EMB_DIR="$OUT_DIR/shared_embeddings/trb"
 
-BACKGROUND_FILE="$AIRR_DIR/joint_hd.tsv"
-BACKGROUND_EMB="$SHARED_EMB_DIR/joint_hd_embeddings.parquet"
+BACKGROUND_FILE="$AIRR_DIR/joint_hd_b27_pos.tsv"
+BACKGROUND_EMB="$EMB_DIR/joint_hd_b27_pos_embeddings.parquet"
 
 samples=(
   as_Abd_PB_F
@@ -43,7 +43,7 @@ samples=(
 JOB_PREFIX="redcea_rheum"
 CPUS_PER_TASK=16
 MEMORY="32gb"
-TIME_LIMIT="01:00:00"
+TIME_LIMIT="08:00:00"
 PARTITION="medium"
 CONSTRAINT="hpc"
 LOG_DIR="$OUT_DIR/logs"
@@ -56,7 +56,7 @@ if [[ ! -f "$BACKGROUND_FILE" ]]; then
   exit 1
 fi
 
-mkdir -p "$OUT_DIR" "$LOG_DIR" "$RUNS_DIR" "$SHARED_EMB_DIR"
+mkdir -p "$OUT_DIR" "$LOG_DIR" "$RUNS_DIR" "$EMB_DIR"
 
 echo "Selected ${#samples[@]} samples"
 echo "Background: $BACKGROUND_FILE"
@@ -71,6 +71,7 @@ fi
 
 for sample in "${samples[@]}"; do
   sample_file="$AIRR_DIR/${sample}.tsv"
+  sample_emb="$EMB_DIR/${sample}_embeddings.parquet"
   run_dir="$RUNS_DIR/$sample"
 
   if [[ ! -f "$sample_file" ]]; then
@@ -90,7 +91,8 @@ for sample in "${samples[@]}"; do
 
 set -euo pipefail
 mkdir -p $(printf '%q' "$run_dir") $(printf '%q' "$OUT_DIR")
-redcea -is $(printf '%q' "$sample_file") -ib $(printf '%q' "$BACKGROUND_FILE") -o $(printf '%q' "$run_dir") -e $(printf '%q' "$sample") -c $(printf '%q' "$CHAIN") -np $(printf '%q' "$NPROC") -be $(printf '%q' "$BACKGROUND_EMB")
+mkdir -p $(printf '%q' "$EMB_DIR")
+redcea -is $(printf '%q' "$sample_file") -ib $(printf '%q' "$BACKGROUND_FILE") -o $(printf '%q' "$run_dir") -e $(printf '%q' "$sample") -c $(printf '%q' "$CHAIN") -np $(printf '%q' "$NPROC") -se $(printf '%q' "$sample_emb") -be $(printf '%q' "$BACKGROUND_EMB")
 find $(printf '%q' "$run_dir") -maxdepth 1 -type f -name $(printf '%q' "${sample}_*") -exec cp -f {} $(printf '%q' "$OUT_DIR/") \;
 EOF
 done
