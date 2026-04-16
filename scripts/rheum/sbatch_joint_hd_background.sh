@@ -8,12 +8,12 @@ LOG_DIR="$OUT_DIR/logs"
 
 BACKGROUND_FILE="$AIRR_DIR/joint_hd_b27pos.tsv"
 
-CPUS_PER_TASK=64
-MEMORY="128gb"
-TIME_LIMIT="02:00:00"
-PARTITION="short"
+CPUS_PER_TASK=32
+MEMORY="64gb"
+TIME_LIMIT="08:00:00"
+PARTITION="medium"
 CONSTRAINT="hpc"
-NPROC=64
+NPROC=32
 
 if [[ ! -f "$BACKGROUND_FILE" ]]; then
   echo "Background AIRR file not found: $BACKGROUND_FILE" >&2
