@@ -403,7 +403,7 @@ def _estimate_vdbscan_group_assignments(
             sample_ss_distances_l2=knn.dist_ss,
             kth_neighbor=int(kth_neighbor_for_eps),
         )
-        gid_all = pd.concat([pd.Series(sample_gid), pd.Series(bg_gid)], ignore_index=True).to_numpy(dtype="int32")
+        gid_all = np.concatenate([sample_gid, bg_gid]).astype(np.int32, copy=False)
         return gid_all, eps_by_gid
     if eps_estimation_based_on == "background":
         logging.info("Running vDBSCAN (eps-by-group from BACKGROUND only; L2 distances)")
@@ -419,7 +419,7 @@ def _estimate_vdbscan_group_assignments(
             sample_ss_distances_l2=knn.dist_bb,
             kth_neighbor=int(kth_neighbor_for_eps),
         )
-        gid_all = pd.concat([pd.Series(sample_gid), pd.Series(bg_gid)], ignore_index=True).to_numpy(dtype="int32")
+        gid_all = np.concatenate([sample_gid, bg_gid]).astype(np.int32, copy=False)
         return gid_all, eps_by_gid
     if eps_estimation_based_on == "all":
         logging.info("Running vDBSCAN (eps-by-group from SAMPLE+BACKGROUND combined; L2 distances)")

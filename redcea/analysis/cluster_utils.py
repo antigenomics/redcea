@@ -8,9 +8,10 @@ import pandas as pd
 
 def compute_cluster_summary(cluster_df: pd.DataFrame, sample_ids) -> pd.DataFrame:
     """Summarize sample/background membership for each non-noise cluster."""
-    cluster_df = cluster_df.copy()
-    sample_ids_set = set(sample_ids)
-    cluster_df["source"] = cluster_df["clone_id"].apply(lambda clone_id: "sample" if clone_id in sample_ids_set else "background")
+    if "source" not in cluster_df.columns:
+        sample_ids_set = set(sample_ids)
+        cluster_df = cluster_df.copy()
+        cluster_df["source"] = cluster_df["clone_id"].isin(sample_ids_set).map({True: "sample", False: "background"})
 
     summary = (
         cluster_df.groupby("cluster_id")["source"]

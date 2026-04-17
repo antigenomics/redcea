@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 
 import pandas as pd
@@ -21,14 +22,19 @@ class JointKnnArtifacts:
 def build_joint_knn_artifacts(
     *,
     config: PipelineConfig,
-    joint_embeddings: pd.DataFrame,
+    sample_embeddings: pd.DataFrame,
+    background_embeddings: pd.DataFrame,
     sample_size: int,
     sample_index_path,
     bg_index_path,
     output_path,
 ) -> JointKnnArtifacts:
+    joint_embeddings = pd.concat([sample_embeddings, background_embeddings], ignore_index=True)
     log_memory_usage("After concatenation")
     df = prepare_data_for_clustering(joint_embeddings, n_components=config.cluster_pc_components)
+    del joint_embeddings
+    gc.collect()
+    log_memory_usage("After PCA; released raw joint embeddings")
 
     bg_data = df[sample_size:]
     sample_data = df[:sample_size]
