@@ -76,7 +76,14 @@ def load_embedding_artifacts(path, args, is_sample, lib, locus, prefix, output_p
         logging.info("Restricting background embeddings to first %d", args.n_bg_points)
         emb = emb.iloc[:args.n_bg_points]
 
-    rep = load_analysis_repertoire(path, lib, locus, args.index_col, args.lower_len_cdr3, args.higher_len_cdr3)
+    rep = load_analysis_repertoire(
+        path,
+        lib,
+        locus,
+        index_col=args.index_col,
+        lower_len_cdr3=args.lower_len_cdr3,
+        higher_len_cdr3=args.higher_len_cdr3,
+    )
 
     if (not is_sample) and getattr(args, "n_bg_points", None):
         rep = rep.sample_n(args.n_bg_points, sample_random=False)

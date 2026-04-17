@@ -35,7 +35,14 @@ def compute_embeddings_if_needed(
         return emb_path
 
     logging.info("Computing %s embeddings...", tag)
-    rep = load_analysis_repertoire(path, lib, locus, config.index_col, config.lower_len_cdr3, config.higher_len_cdr3)
+    rep = load_analysis_repertoire(
+        path,
+        lib,
+        locus,
+        index_col=config.index_col,
+        lower_len_cdr3=config.lower_len_cdr3,
+        higher_len_cdr3=config.higher_len_cdr3,
+    )
 
     if (not is_sample) and config.n_bg_points:
         logging.info("Restricting background repertoire to first %d clonotypes (pre-embedding)", config.n_bg_points)
@@ -51,7 +58,7 @@ def compute_embeddings_if_needed(
 
     if not hasattr(proto, "total"):
         proto_path = resolve_prototype_file(str(proto) if proto else None, config.chain)
-        proto = load_prototype_repertoire(proto_path, lib, locus, config.index_col)
+        proto = load_prototype_repertoire(proto_path, lib, locus, index_col=config.index_col)
 
     embeddings = run_tcremp_embedding(rep, proto, lib, chain, config.metrics, config.normalized_nproc)
     embeddings.to_parquet(Path(emb_path), index=False)
