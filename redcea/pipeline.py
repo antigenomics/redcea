@@ -146,7 +146,7 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     for tag, path in repertoire_paths.items():
         logging.info("Computing %s embeddings if needed...", tag)
         compute_embeddings_if_needed(
-            path,
+            str(path),
             config,
             is_sample=(tag == "sample"),
             proto=runtime.prototype_path,
@@ -161,7 +161,7 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     for tag, path in repertoire_paths.items():
         logging.info("Loading %s embeddings...", tag)
         loaded_embeddings[tag] = load_embedding_artifacts(
-            path,
+            str(path),
             config,
             is_sample=(tag == "sample"),
             lib=runtime.segment_library,
