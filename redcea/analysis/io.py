@@ -80,9 +80,9 @@ def load_embedding_artifacts(path, args, is_sample, lib, locus, prefix, output_p
         path,
         lib,
         locus,
-        index_col=args.index_col,
-        lower_len_cdr3=args.lower_len_cdr3,
-        higher_len_cdr3=args.higher_len_cdr3,
+        mapping_column=args.index_col,
+        llen=args.lower_len_cdr3,
+        hlen=args.higher_len_cdr3,
     )
 
     if (not is_sample) and getattr(args, "n_bg_points", None):
