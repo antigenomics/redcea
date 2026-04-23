@@ -30,7 +30,6 @@ class PipelineArtifacts:
     cluster_df: pd.DataFrame
     summary_df: pd.DataFrame
     enriched_clonotypes_df: pd.DataFrame
-    enriched_embeddings_df: pd.DataFrame
 
 
 def get_sample_info(
@@ -76,7 +75,14 @@ def load_embedding_artifacts(path, args, is_sample, lib, locus, prefix, output_p
         logging.info("Restricting background embeddings to first %d", args.n_bg_points)
         emb = emb.iloc[:args.n_bg_points]
 
-    rep = load_analysis_repertoire(path, lib, locus, args.index_col, args.lower_len_cdr3, args.higher_len_cdr3)
+    rep = load_analysis_repertoire(
+        path,
+        lib,
+        locus,
+        mapping_column=args.index_col,
+        llen=args.lower_len_cdr3,
+        hlen=args.higher_len_cdr3,
+    )
 
     if (not is_sample) and getattr(args, "n_bg_points", None):
         rep = rep.sample_n(args.n_bg_points, sample_random=False)
@@ -122,9 +128,6 @@ def save_pipeline_outputs(artifacts: PipelineArtifacts, *, output_path, prefix: 
         output_path / f"{prefix}_enriched_clonotypes_tcremp.tsv", sep="\t", index=False
     )
     logging.info("Saved enriched clonotypes.")
-
-    artifacts.enriched_embeddings_df.to_parquet(output_path / f"{prefix}_enriched_embeddings_tcremp.parquet")
-    logging.info("Saved enriched embeddings.")
 
 
 __all__ = [

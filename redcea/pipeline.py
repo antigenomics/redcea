@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,7 +67,8 @@ def prepare_runtime_context(args) -> RuntimeContext:
 def compute_cluster_labels(
     *,
     config: PipelineConfig,
-    joint_embeddings: pd.DataFrame,
+    sample_embeddings: pd.DataFrame,
+    background_embeddings: pd.DataFrame,
     joint_representations: pd.DataFrame,
     sample_representations: pd.DataFrame,
     background_representations: pd.DataFrame,
@@ -78,7 +80,8 @@ def compute_cluster_labels(
     logging.info("Running clustering...")
     knn = build_joint_knn_artifacts(
         config=config,
-        joint_embeddings=joint_embeddings,
+        sample_embeddings=sample_embeddings,
+        background_embeddings=background_embeddings,
         sample_size=sample_size,
         sample_index_path=sample_index_path,
         bg_index_path=bg_index_path,
@@ -98,14 +101,17 @@ def build_pipeline_artifacts(
     cluster_labels,
     joint_ids: pd.Series,
     joint_representations: pd.DataFrame,
-    joint_embeddings: pd.DataFrame,
     sample_ids: pd.Series,
     background_ids: pd.Series,
 ) -> PipelineArtifacts:
     log_memory_usage("After clustering")
 
-    cluster_df = pd.DataFrame({"clone_id": joint_ids, "cluster_id": cluster_labels}).merge(joint_representations)
-    summary_df = compute_cluster_summary(cluster_df.copy(), sample_ids)
+    cluster_df = _build_cluster_df(
+        cluster_labels=cluster_labels,
+        joint_ids=joint_ids,
+        joint_representations=joint_representations,
+    )
+    summary_df = compute_cluster_summary(cluster_df, sample_ids)
     summary_df = add_z_binom_pvalues(summary_df, total_sample=len(sample_ids), total_background=len(background_ids))
     summary_df = add_log_fold_change(summary_df, total_sample=len(sample_ids), total_background=len(background_ids))
 
@@ -117,17 +123,32 @@ def build_pipeline_artifacts(
 
     enriched_clonotypes_df = cluster_df.merge(enriched_clusters, on="cluster_id")
 
-    joint_embeddings = joint_embeddings.copy()
-    joint_embeddings["clone_id"] = joint_ids
-    enriched_embeddings_df = enriched_clonotypes_df[
-        ["clone_id", "cluster_id", "source", "enrichment_pvalue_zbinom"]
-    ].merge(joint_embeddings)
-
     return PipelineArtifacts(
         cluster_df=cluster_df,
         summary_df=summary_df,
         enriched_clonotypes_df=enriched_clonotypes_df,
-        enriched_embeddings_df=enriched_embeddings_df,
+    )
+
+
+def _build_cluster_df(
+    *,
+    cluster_labels,
+    joint_ids: pd.Series,
+    joint_representations: pd.DataFrame,
+) -> pd.DataFrame:
+    if (
+        "clone_id" in joint_representations.columns
+        and len(joint_representations) == len(joint_ids)
+        and joint_representations["clone_id"].reset_index(drop=True).equals(joint_ids.reset_index(drop=True))
+    ):
+        cluster_df = joint_representations.copy()
+        insert_at = cluster_df.columns.get_loc("clone_id") + 1
+        cluster_df.insert(insert_at, "cluster_id", cluster_labels)
+        return cluster_df
+
+    return pd.DataFrame({"clone_id": joint_ids, "cluster_id": cluster_labels}).merge(
+        joint_representations,
+        on="clone_id",
     )
 
 
@@ -146,7 +167,7 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     for tag, path in repertoire_paths.items():
         logging.info("Computing %s embeddings if needed...", tag)
         compute_embeddings_if_needed(
-            path,
+            str(path),
             config,
             is_sample=(tag == "sample"),
             proto=runtime.prototype_path,
@@ -161,7 +182,7 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     for tag, path in repertoire_paths.items():
         logging.info("Loading %s embeddings...", tag)
         loaded_embeddings[tag] = load_embedding_artifacts(
-            path,
+            str(path),
             config,
             is_sample=(tag == "sample"),
             lib=runtime.segment_library,
@@ -182,7 +203,6 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     logging.info("Sample FAISS index path: %s", sample_artifacts.cache_path)
     logging.info("Background FAISS index path: %s", background_artifacts.cache_path)
 
-    joint_embeddings = pd.concat([sample_artifacts.embeddings, background_artifacts.embeddings], ignore_index=True)
     joint_representations = pd.concat(
         [sample_artifacts.representations, background_artifacts.representations],
         ignore_index=True,
@@ -192,7 +212,8 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
 
     cluster_labels = compute_cluster_labels(
         config=config,
-        joint_embeddings=joint_embeddings,
+        sample_embeddings=sample_artifacts.embeddings,
+        background_embeddings=background_artifacts.embeddings,
         joint_representations=joint_representations,
         sample_representations=sample_artifacts.representations,
         background_representations=background_artifacts.representations,
@@ -206,10 +227,12 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
         cluster_labels=cluster_labels,
         joint_ids=joint_ids,
         joint_representations=joint_representations,
-        joint_embeddings=joint_embeddings,
         sample_ids=sample_artifacts.ids,
         background_ids=background_artifacts.ids,
     )
+    del sample_artifacts.embeddings
+    del background_artifacts.embeddings
+    gc.collect()
     save_pipeline_outputs(artifacts, output_path=runtime.output_path, prefix=runtime.prefix)
 
     logging.info("RedCEA pipeline completed.")
