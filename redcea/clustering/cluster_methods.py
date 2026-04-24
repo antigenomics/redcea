@@ -10,7 +10,12 @@ import pandas as pd
 from redcea.config import PipelineConfig
 
 from .preprocess import standardize_data, apply_pca
-from .eps_estimation import estimate_dbscan_eps, cluster_dbscan, cluster_dbscan_with_filter
+from .eps_estimation import (
+    estimate_dbscan_eps,
+    cluster_dbscan,
+    cluster_dbscan_with_filter,
+    knn_neighbor_distances,
+)
 from .cdr3_grouping import compute_cdr3_len, build_len_to_group_id, map_len_to_group_id
 from .eps_estimation import estimate_eps_by_group_from_sample, eps_per_point_from_group_id, estimate_eps_by_group_flexible
 from .vdbscan import vdbscan_from_knn
@@ -77,16 +82,7 @@ def run_dbscan_clustering_with_prefilter(
 
 
 def _nearest_neighbor_distances_from_knn(knn_distances: np.ndarray) -> np.ndarray:
-    if knn_distances.ndim != 2 or knn_distances.shape[1] < 1:
-        raise ValueError("knn_distances must be a 2D array with at least one neighbor column")
-
-    if knn_distances.shape[1] == 1:
-        return knn_distances[:, 0]
-
-    first_col = knn_distances[:, 0]
-    if np.all(np.abs(first_col) < 1e-8):
-        return knn_distances[:, 1]
-    return first_col
+    return knn_neighbor_distances(knn_distances, neighbor_rank=1)
 
 
 # ==========================
@@ -492,7 +488,7 @@ def run_joint_clustering(
     if config.cluster_algo == "dbscan":
         eps = estimate_dbscan_eps(
             data=None,
-            distances=knn.distances[:, config.eps_k_neighbors - 1],
+            distances=knn_neighbor_distances(knn.distances, config.eps_k_neighbors),
             n_neighbors=config.eps_k_neighbors,
         )
         return run_dbscan_clustering_with_prefilter(

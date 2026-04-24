@@ -8,6 +8,27 @@ from sklearn.neighbors import NearestNeighbors
 from kneed import KneeLocator
 
 
+def knn_neighbor_distances(knn_distances: np.ndarray, neighbor_rank: int) -> np.ndarray:
+    """
+    Return distances to the `neighbor_rank`-th nearest *other* point.
+
+    Column 0 is assumed to be self-distance, so neighbor ranks start at column 1.
+    """
+    knn_distances = np.asarray(knn_distances)
+    if knn_distances.ndim != 2 or knn_distances.shape[1] < 1:
+        raise ValueError("knn_distances must be a 2D array with at least one neighbor column")
+    if neighbor_rank < 1:
+        raise ValueError("neighbor_rank must be >= 1")
+
+    col_idx = neighbor_rank
+    if col_idx >= knn_distances.shape[1]:
+        raise ValueError(
+            f"neighbor_rank={neighbor_rank} requires column {col_idx}, "
+            f"but knn_distances has only {knn_distances.shape[1]} columns"
+        )
+    return knn_distances[:, col_idx]
+
+
 # === copied 1:1 from your snippet ===
 
 def estimate_dbscan_eps(
@@ -26,7 +47,7 @@ def estimate_dbscan_eps(
         neigh = NearestNeighbors(n_neighbors=n_neighbors)
         nbrs = neigh.fit(data)
         dists, _ = nbrs.kneighbors(data)
-        kth_distances = dists[:, n_neighbors - 1]
+        kth_distances = knn_neighbor_distances(dists, n_neighbors)
         total_num = len(data)
     else:
         kth_distances = np.asarray(distances)
@@ -162,7 +183,7 @@ def estimate_eps_by_group_from_sample(
                 "Merge more (increase min_frac) or reduce kth_neighbor."
             )
 
-        kth = sample_ss_distances_l2[idx, kth_neighbor - 1]
+        kth = knn_neighbor_distances(sample_ss_distances_l2[idx], kth_neighbor)
         eps = estimate_dbscan_eps(
                 data=None,
                 distances=kth,
@@ -274,7 +295,7 @@ def estimate_eps_by_group_flexible(
                 "Merge more (increase min_frac) or reduce kth_neighbor."
             )
         
-        kth = dist_matrix[idx, kth_neighbor - 1]
+        kth = knn_neighbor_distances(dist_matrix[idx], kth_neighbor)
         eps = estimate_dbscan_eps(
             data=None,
             distances=kth,
