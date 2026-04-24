@@ -59,6 +59,18 @@ python -m pip install .[leiden]
 
 If this optional install fails, you can still run the default `vdbscan` pipeline.
 
+### Clustering modes
+
+`redcea` supports several clustering backends:
+
+* `vdbscan`: default RedCEA mode with per-group `eps` estimation on the joint sample/background graph
+* `dbscan`: legacy TCRempNet mode on reduced embeddings, with pre-filtering of points with `d1 > eps` before running plain `DBSCAN`
+* `leiden`: graph clustering on the joint KNN graph
+* `hierarchical_leiden`: two-stage Leiden clustering
+* `leiden_dbscan`: Leiden followed by per-cluster DBSCAN refinement
+
+Use `dbscan` if you need behavior closer to historical TCRempNet runs and want the old epsilon-based noise pre-filter back.
+
 ### Verify the installation
 
 Run the following commands in the activated environment:
@@ -268,12 +280,12 @@ tcremp-run \
 | `-cl` | `--cluster` | No | `True` | Run clustering in embedding workflow |
 | `-se` | `--sample-embedding` | No | none | Path to precomputed sample embeddings |
 | `-be` | `--background-embedding` | No | none | Path to precomputed background embeddings |
-| `--cluster-algo` | `--cluster-algo` | No | `vdbscan` | `vdbscan`, `leiden`, `hierarchical_leiden`, or `leiden_dbscan` |
+| `--cluster-algo` | `--cluster-algo` | No | `vdbscan` | `vdbscan`, `dbscan`, `leiden`, `hierarchical_leiden`, or `leiden_dbscan` |
 | `--n-bg-points` | `--n-bg-points` | No | all available | Limit background clonotypes to first N entries |
 | `-npc` | `--cluster-pc-components` | No | `50` | Number of PCA components before clustering |
 | `-ms` | `--cluster-min-samples` | No | `3` | Core-point threshold for clustering |
 | `-kn` | `--k-neighbors` | No | `4` | Number of neighbors in the KNN graph |
-| `-ekn` | `--eps-k-neighbors` | No | `4` | K-th neighbor used for eps estimation in `vdbscan` |
+| `-ekn` | `--eps-k-neighbors` | No | `4` | K-th neighbor used for eps estimation in `vdbscan` and `dbscan` |
 | `--leiden-resolution` | `--leiden-resolution` | No | `1.0` | Leiden resolution parameter |
 | `--leiden-sub-resolution` | `--leiden-sub-resolution` | No | `1.0` | Subclustering resolution for `hierarchical_leiden` |
 | `--eps-estimation-based-on` | `--eps-estimation-based-on` | No | `sample` | Estimate eps from `sample`, `background`, or `all` |

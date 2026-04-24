@@ -89,6 +89,57 @@ def cluster_dbscan(data, eps=None, min_samples=5):
     return labels
 
 
+def cluster_dbscan_with_filter(data, eps=None, min_samples=5, nearest_neighbor_distances=None):
+    """
+    Legacy TCRempNet DBSCAN:
+    pre-filter points with d1 > eps, then run DBSCAN on the remainder.
+    Filtered-out points are marked as noise (-1).
+    """
+    if nearest_neighbor_distances is None:
+        raise ValueError("nearest_neighbor_distances is required for legacy DBSCAN pre-filtering")
+
+    data = np.asarray(data)
+    d1 = np.asarray(nearest_neighbor_distances)
+    if data.shape[0] != d1.shape[0]:
+        raise ValueError(
+            "nearest_neighbor_distances must have one value per row in data: "
+            f"got data={data.shape[0]} rows and d1={d1.shape[0]}"
+        )
+
+    n_total = data.shape[0]
+    start = time.time()
+    mask = d1 <= eps
+    n_filtered_out = int(np.sum(~mask))
+    logging.info(
+        "Filtered out %d points out of %d (%.2f%%) due to large d1 > eps",
+        n_filtered_out,
+        n_total,
+        100.0 * n_filtered_out / max(1, n_total),
+    )
+
+    labels = np.full(n_total, -1, dtype=int)
+    if not np.any(mask):
+        logging.info("Filtered DBSCAN completed: all points were filtered out before clustering.")
+        return labels
+
+    filtered_data = data[mask]
+    db = DBSCAN(eps=eps, min_samples=min_samples)
+    filtered_labels = db.fit_predict(filtered_data)
+
+    labels[mask] = filtered_labels
+
+    elapsed = time.time() - start
+    n_clusters = len(set(filtered_labels)) - (1 if -1 in filtered_labels else 0)
+    n_noise = int(np.count_nonzero(labels == -1))
+    logging.info(
+        "Filtered DBSCAN completed: clusters = %d, noise points = %d, time: %.2f sec.",
+        n_clusters,
+        n_noise,
+        elapsed,
+    )
+    return labels
+
+
 # === new: eps by group learned on SAMPLE only ===
 
 def estimate_eps_by_group_from_sample(

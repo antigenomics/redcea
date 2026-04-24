@@ -10,7 +10,7 @@ import pandas as pd
 from redcea.config import PipelineConfig
 
 from .preprocess import standardize_data, apply_pca
-from .eps_estimation import estimate_dbscan_eps, cluster_dbscan
+from .eps_estimation import estimate_dbscan_eps, cluster_dbscan, cluster_dbscan_with_filter
 from .cdr3_grouping import compute_cdr3_len, build_len_to_group_id, map_len_to_group_id
 from .eps_estimation import estimate_eps_by_group_from_sample, eps_per_point_from_group_id, estimate_eps_by_group_flexible
 from .vdbscan import vdbscan_from_knn
@@ -49,6 +49,44 @@ def run_dbscan_clustering(
     eps = estimate_dbscan_eps(reduced, n_neighbors=n_neighbors)
     labels = cluster_dbscan(reduced, eps=eps, min_samples=min_samples)
     return labels
+
+
+def run_dbscan_clustering_with_prefilter(
+    data_reduced: np.ndarray,
+    *,
+    eps: float,
+    nearest_neighbor_distances: np.ndarray,
+    min_samples: int = 5,
+) -> np.ndarray:
+    """
+    Legacy TCRempNet DBSCAN:
+    use precomputed reduced embeddings, estimate noise by d1 > eps,
+    then run DBSCAN on the remaining points.
+    """
+    if not isinstance(data_reduced, np.ndarray):
+        data_reduced = np.asarray(data_reduced)
+    if not np.isfinite(data_reduced).all():
+        raise ValueError("data_reduced contains NaN/inf")
+
+    return cluster_dbscan_with_filter(
+        data_reduced,
+        eps=eps,
+        min_samples=min_samples,
+        nearest_neighbor_distances=nearest_neighbor_distances,
+    )
+
+
+def _nearest_neighbor_distances_from_knn(knn_distances: np.ndarray) -> np.ndarray:
+    if knn_distances.ndim != 2 or knn_distances.shape[1] < 1:
+        raise ValueError("knn_distances must be a 2D array with at least one neighbor column")
+
+    if knn_distances.shape[1] == 1:
+        return knn_distances[:, 0]
+
+    first_col = knn_distances[:, 0]
+    if np.all(np.abs(first_col) < 1e-8):
+        return knn_distances[:, 1]
+    return first_col
 
 
 # ==========================
@@ -451,6 +489,18 @@ def run_joint_clustering(
     sample_mask = np.zeros(len(joint_representations), dtype=bool)
     sample_mask[: len(sample_representations)] = True
 
+    if config.cluster_algo == "dbscan":
+        eps = estimate_dbscan_eps(
+            data=None,
+            distances=knn.distances[:, config.eps_k_neighbors - 1],
+            n_neighbors=config.eps_k_neighbors,
+        )
+        return run_dbscan_clustering_with_prefilter(
+            knn.data_reduced,
+            eps=eps,
+            nearest_neighbor_distances=_nearest_neighbor_distances_from_knn(knn.distances),
+            min_samples=config.cluster_min_samples,
+        )
     if config.cluster_algo == "leiden_dbscan":
         return hierarchical_leiden_dbscan_clustering(
             data_reduced=knn.data_reduced,
@@ -502,5 +552,5 @@ def run_joint_clustering(
 
     raise ValueError(
         f"Unknown cluster_algo='{config.cluster_algo}'. "
-        "Expected one of: leiden_dbscan, hierarchical_leiden, leiden, vdbscan"
+        "Expected one of: dbscan, leiden_dbscan, hierarchical_leiden, leiden, vdbscan"
     )
