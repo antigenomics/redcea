@@ -14,19 +14,11 @@ def estimate_dbscan_eps(
     data,
     distances=None,
     n_neighbors: int = 4,
-    quantile: float = 0.05,
+    quantile: float = 0.05,   # оставляем для совместимости, но legacy его не использует
     poly_degree: int = 10,
 ):
     """
-    Estimate DBSCAN eps using k-NN distances and KneeLocator.
-
-    Parameters
-    ----------
-    data : array-like, shape (n_samples, n_features)
-        Original data (used only if distances is None).
-    distances : array-like or None
-        Optional precomputed distances to k-th neighbor for each point
-        (1D array). If provided, we skip NearestNeighbors fitting.
+    Legacy eps estimation from old TCRemp/RedCEA implementation.
     """
     start = time.time()
 
@@ -35,44 +27,40 @@ def estimate_dbscan_eps(
         nbrs = neigh.fit(data)
         dists, _ = nbrs.kneighbors(data)
         kth_distances = dists[:, n_neighbors - 1]
+        total_num = len(data)
     else:
         kth_distances = np.asarray(distances)
+        total_num = len(kth_distances)
 
-    kth_distances = np.sort(kth_distances)
-    
-    tol = 1e-8
-    start = np.searchsorted(kth_distances, tol, side="right")  # пропускаем все ~0
-    kth_distances = kth_distances[start:]
-    
-    if len(kth_distances) > 20000:
-        kth_distances = np.random.choice(
-            kth_distances, size=20000, replace=False
-        )
-        kth_distances = np.sort(kth_distances)
+    number_of_points_for_knee = min(
+        total_num,
+        max(20000, int(total_num * 0.2)),
+    )
+
+    chosen_elements = np.random.choice(
+        kth_distances,
+        size=number_of_points_for_knee,
+    )
+
+    distances_sorted = np.sort(chosen_elements)
 
     knee = KneeLocator(
-        range(1, len(kth_distances) + 1),  # x values
-        kth_distances,                     # y values
+        range(1, len(distances_sorted) + 1),
+        distances_sorted,
         S=1.0,
-        online=False,  # disable KneeLocator online mode for better performance
-        curve="convex",  # convex curve for kNN distances (increasing and convex)
+        curve="concave",
         interp_method="polynomial",
         polynomial_degree=poly_degree,
+        online=True,
         direction="increasing",
     )
 
-    if knee.knee is not None:
-        if knee.knee < 1 or knee.knee > len(kth_distances):
-            logging.warning(
-                f"KneeLocator returned invalid knee index {knee.knee}, returning cluster max."
-            )
-            eps = kth_distances[-1]
-        eps = kth_distances[knee.knee]
-    else:
-        eps = kth_distances[int(len(kth_distances) * quantile)]
+    eps = distances_sorted[knee.knee]
 
-    elapsed = time.time() - start
-    logging.info(f"Estimated eps for DBSCAN: {eps:.4f}, time: {elapsed:.2f} sec.")
+    logging.info(
+        f"Estimated eps for DBSCAN: {eps:.4f}, total time: {(time.time() - start):.2f} sec."
+    )
+
     return eps
 
 
