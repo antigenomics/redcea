@@ -353,7 +353,7 @@ def compute_split_knn(
         db=bg_arr,
         db_index_path=bg_index_path,
         rebuild_db_index=rebuild_bg,
-        k=k_neighbors,
+        k=self_k,
         nproc=nproc,
     )
 
@@ -362,7 +362,7 @@ def compute_split_knn(
         db=sample_arr,
         db_index_path=sample_index_path,
         rebuild_db_index=rebuild_sample,
-        k=k_neighbors,
+        k=self_k,
         nproc=nproc,
     )
 
