@@ -55,7 +55,7 @@ def add_redcea_pipeline_args(parser: argparse.ArgumentParser) -> argparse.Argume
     )
     parser.add_argument(
         "--cluster-algo",
-        choices=["leiden_dbscan", "hierarchical_leiden", "leiden", "vdbscan"],
+        choices=["dbscan", "leiden_dbscan", "hierarchical_leiden", "leiden", "vdbscan"],
         default="vdbscan",
         help="Clustering algorithm to use.",
     )
