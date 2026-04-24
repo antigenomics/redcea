@@ -108,7 +108,7 @@ def run_joint_vdbscan(
         dist_bb=dist_bb, ind_bb=ind_bb,
         dist_sb=dist_sb, ind_sb=ind_sb,
         dist_bs=dist_bs, ind_bs=ind_bs,
-        k_out=k_neighbors,
+        k_out=k_neighbors + 1,
     )
 
     # 7) run vDBSCAN on joint graph
