@@ -1,6 +1,7 @@
 # tcrempnet/clustering/cluster_methods.py
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from typing import Optional
 
@@ -8,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from redcea.config import PipelineConfig
+from redcea.debug import summarize_distribution
 
 from .preprocess import standardize_data, apply_pca
 from .eps_estimation import (
@@ -15,10 +17,23 @@ from .eps_estimation import (
     cluster_dbscan,
     cluster_dbscan_with_filter,
     knn_neighbor_distances,
+    legacy_kth_returned_neighbor_distances,
 )
 from .cdr3_grouping import compute_cdr3_len, build_len_to_group_id, map_len_to_group_id
 from .eps_estimation import estimate_eps_by_group_from_sample, eps_per_point_from_group_id, estimate_eps_by_group_flexible
 from .vdbscan import vdbscan_from_knn
+
+
+@dataclass
+class JointDbscanDebugArtifacts:
+    labels: np.ndarray
+    eps: float
+    eps_column: int
+    eps_distances: np.ndarray
+    d1_column: int
+    d1_distances: np.ndarray
+    keep_mask: np.ndarray
+    self_index_fraction: float
 
 
 # --- optional dependency: networkit ---
@@ -83,6 +98,104 @@ def run_dbscan_clustering_with_prefilter(
 
 def _nearest_neighbor_distances_from_knn(knn_distances: np.ndarray) -> np.ndarray:
     return knn_neighbor_distances(knn_distances, neighbor_rank=1)
+
+
+def _legacy_eps_distances_from_knn(knn_distances: np.ndarray, kth_neighbor: int) -> tuple[int, np.ndarray]:
+    eps_column = int(kth_neighbor) - 1
+    return eps_column, legacy_kth_returned_neighbor_distances(knn_distances, kth_neighbor)
+
+
+def run_joint_dbscan_clustering_with_diagnostics(
+    *,
+    config: PipelineConfig,
+    knn,
+) -> JointDbscanDebugArtifacts:
+    d0 = np.asarray(knn.distances[:, 0], dtype=np.float64)
+    d1 = np.asarray(_nearest_neighbor_distances_from_knn(knn.distances), dtype=np.float64)
+    eps_column, eps_distances_raw = _legacy_eps_distances_from_knn(knn.distances, config.eps_k_neighbors)
+    eps_distances = np.asarray(eps_distances_raw, dtype=np.float64)
+    self_index_fraction = float(np.mean(knn.indices[:, 0] == np.arange(knn.indices.shape[0])))
+
+    d0_stats = summarize_distribution(d0)
+    d1_stats = summarize_distribution(d1)
+    eps_input_stats = summarize_distribution(eps_distances)
+
+    logging.info(
+        "DBSCAN input: shape=%s cluster_algo=%s min_samples=%d k_neighbors=%d eps_k_neighbors=%d pc_components=%d",
+        tuple(knn.data_reduced.shape),
+        config.cluster_algo,
+        config.cluster_min_samples,
+        config.k_neighbors,
+        config.eps_k_neighbors,
+        config.cluster_pc_components,
+    )
+    logging.info(
+        "KNN self check: self_index_fraction=%.6f, d0_min=%.6f, d0_max=%.6f, d0_q99=%.6f",
+        self_index_fraction,
+        d0_stats["min"],
+        d0_stats["max"],
+        d0_stats["q99"],
+    )
+    logging.info(
+        "Nearest non-self neighbor distance stats: min=%.6f q01=%.6f q05=%.6f q25=%.6f q50=%.6f q75=%.6f q95=%.6f q99=%.6f max=%.6f",
+        d1_stats["min"],
+        d1_stats["q01"],
+        d1_stats["q05"],
+        d1_stats["q25"],
+        d1_stats["q50"],
+        d1_stats["q75"],
+        d1_stats["q95"],
+        d1_stats["q99"],
+        d1_stats["max"],
+    )
+
+    eps = float(
+        estimate_dbscan_eps(
+            data=None,
+            distances=eps_distances,
+            n_neighbors=config.eps_k_neighbors,
+        )
+    )
+    logging.info(
+        "DBSCAN eps input stats: column=%d min=%.6f q01=%.6f q05=%.6f q25=%.6f q50=%.6f q75=%.6f q95=%.6f q99=%.6f max=%.6f eps=%.6f",
+        eps_column,
+        eps_input_stats["min"],
+        eps_input_stats["q01"],
+        eps_input_stats["q05"],
+        eps_input_stats["q25"],
+        eps_input_stats["q50"],
+        eps_input_stats["q75"],
+        eps_input_stats["q95"],
+        eps_input_stats["q99"],
+        eps_input_stats["max"],
+        eps,
+    )
+
+    labels, filter_details = cluster_dbscan_with_filter(
+        knn.data_reduced,
+        eps=eps,
+        min_samples=config.cluster_min_samples,
+        nearest_neighbor_distances=d1,
+        return_details=True,
+    )
+    keep_mask = np.asarray(filter_details["keep_mask"], dtype=bool)
+    logging.info(
+        "DBSCAN prefilter summary: d1_column=%d removed=%d kept=%d",
+        1,
+        int(np.count_nonzero(~keep_mask)),
+        int(np.count_nonzero(keep_mask)),
+    )
+
+    return JointDbscanDebugArtifacts(
+        labels=np.asarray(labels),
+        eps=eps,
+        eps_column=eps_column,
+        eps_distances=eps_distances,
+        d1_column=1,
+        d1_distances=d1,
+        keep_mask=keep_mask,
+        self_index_fraction=self_index_fraction,
+    )
 
 
 # ==========================
@@ -486,9 +599,10 @@ def run_joint_clustering(
     sample_mask[: len(sample_representations)] = True
 
     if config.cluster_algo == "dbscan":
+        _, eps_distances = _legacy_eps_distances_from_knn(knn.distances, config.eps_k_neighbors)
         eps = estimate_dbscan_eps(
             data=None,
-            distances=knn_neighbor_distances(knn.distances, config.eps_k_neighbors),
+            distances=eps_distances,
             n_neighbors=config.eps_k_neighbors,
         )
         return run_dbscan_clustering_with_prefilter(

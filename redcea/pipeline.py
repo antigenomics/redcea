@@ -6,13 +6,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import faiss
+import numpy as np
 import pandas as pd
 from mir.common.segments import SegmentLibrary
 
 from redcea.analysis.cluster_utils import compute_cluster_summary
 from redcea.analysis.io import EmbeddingArtifacts, PipelineArtifacts, load_embedding_artifacts, save_pipeline_outputs
 from redcea.clustering import build_joint_knn_artifacts, run_joint_clustering
+from redcea.clustering.cluster_methods import JointDbscanDebugArtifacts, run_joint_dbscan_clustering_with_diagnostics
 from redcea.config import PipelineConfig, normalize_pipeline_config
+from redcea.debug import (
+    build_cluster_membership_frame,
+    build_input_order_frame,
+    prepare_debug_dir,
+    save_json,
+    save_numpy,
+    save_tsv,
+    summarize_distribution,
+)
 from redcea.embeddings import compute_embeddings_if_needed
 from redcea.utils.paths import resolve_prototype_file
 from redcea.utils.stats import add_log_fold_change, add_z_binom_pvalues
@@ -38,6 +49,13 @@ class RuntimeContext:
     segment_library: SegmentLibrary
 
 
+@dataclass(frozen=True)
+class ClusteringOutputs:
+    labels: np.ndarray
+    knn: object
+    dbscan_debug: JointDbscanDebugArtifacts | None = None
+
+
 def prepare_runtime_context(args) -> RuntimeContext:
     sample_path = Path(resolve_input_file(args.sample))
     background_path = Path(resolve_input_file(args.background))
@@ -49,9 +67,11 @@ def prepare_runtime_context(args) -> RuntimeContext:
     chain_genes = args.chain.split("_")
     locus = {"TRA": "alpha", "TRB": "beta", "TRA_TRB": None}[args.chain]
     segment_library = SegmentLibrary.load_default(genes=chain_genes, organisms=args.species)
+    np.random.seed(args.random_seed)
 
     faiss.omp_set_num_threads(args.normalized_nproc)
     logging.info("FAISS threads set to %d", faiss.omp_get_max_threads())
+    logging.info("NumPy random seed set to %d", args.random_seed)
 
     return RuntimeContext(
         sample_path=sample_path,
@@ -76,7 +96,7 @@ def compute_cluster_labels(
     sample_index_path,
     bg_index_path,
     output_path,
-):
+)-> ClusteringOutputs:
     logging.info("Running clustering...")
     knn = build_joint_knn_artifacts(
         config=config,
@@ -87,13 +107,18 @@ def compute_cluster_labels(
         bg_index_path=bg_index_path,
         output_path=output_path,
     )
-    return run_joint_clustering(
+    if config.cluster_algo == "dbscan":
+        dbscan_debug = run_joint_dbscan_clustering_with_diagnostics(config=config, knn=knn)
+        return ClusteringOutputs(labels=dbscan_debug.labels, knn=knn, dbscan_debug=dbscan_debug)
+
+    labels = run_joint_clustering(
         config=config,
         joint_representations=joint_representations,
         sample_representations=sample_representations,
         background_representations=background_representations,
         knn=knn,
     )
+    return ClusteringOutputs(labels=np.asarray(labels), knn=knn, dbscan_debug=None)
 
 
 def build_pipeline_artifacts(
@@ -210,7 +235,7 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     sample_size = len(sample_artifacts.embeddings)
     joint_ids = pd.concat([sample_artifacts.ids, background_artifacts.ids], ignore_index=True)
 
-    cluster_labels = compute_cluster_labels(
+    clustering_outputs = compute_cluster_labels(
         config=config,
         sample_embeddings=sample_artifacts.embeddings,
         background_embeddings=background_artifacts.embeddings,
@@ -224,12 +249,22 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     )
 
     artifacts = build_pipeline_artifacts(
-        cluster_labels=cluster_labels,
+        cluster_labels=clustering_outputs.labels,
         joint_ids=joint_ids,
         joint_representations=joint_representations,
         sample_ids=sample_artifacts.ids,
         background_ids=background_artifacts.ids,
     )
+    if config.debug_save_intermediate:
+        _save_debug_outputs(
+            config=config,
+            runtime=runtime,
+            sample_embeddings=sample_artifacts.embeddings,
+            background_embeddings=background_artifacts.embeddings,
+            joint_representations=joint_representations,
+            artifacts=artifacts,
+            clustering_outputs=clustering_outputs,
+        )
     del sample_artifacts.embeddings
     del background_artifacts.embeddings
     gc.collect()
@@ -238,6 +273,80 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     logging.info("RedCEA pipeline completed.")
     log_memory_usage("Finished")
     return artifacts
+
+
+def _save_debug_outputs(
+    *,
+    config: PipelineConfig,
+    runtime: RuntimeContext,
+    sample_embeddings: pd.DataFrame,
+    background_embeddings: pd.DataFrame,
+    joint_representations: pd.DataFrame,
+    artifacts: PipelineArtifacts,
+    clustering_outputs: ClusteringOutputs,
+) -> None:
+    debug_dir = prepare_debug_dir(runtime.output_path, config.debug_output_dir)
+    input_order = build_input_order_frame(joint_representations, sample_size=len(sample_embeddings))
+    save_tsv(debug_dir / "01_input_order.tsv", input_order)
+
+    joint_embeddings = pd.concat([sample_embeddings, background_embeddings], ignore_index=True)
+    save_numpy(debug_dir / "02_representations.npy", joint_embeddings.to_numpy(dtype=np.float32, copy=False))
+    save_tsv(debug_dir / "02_representations_meta.tsv", input_order)
+
+    save_numpy(debug_dir / "03_pca_embeddings.npy", np.asarray(clustering_outputs.knn.data_reduced))
+    save_numpy(debug_dir / "04_knn_distances.npy", np.asarray(clustering_outputs.knn.distances))
+    save_numpy(debug_dir / "05_knn_indices.npy", np.asarray(clustering_outputs.knn.indices))
+
+    dbscan_debug = clustering_outputs.dbscan_debug
+    if dbscan_debug is not None:
+        eps_stats = summarize_distribution(dbscan_debug.eps_distances)
+        eps_frame = pd.DataFrame(
+            [
+                {
+                    "eps_value": dbscan_debug.eps,
+                    "eps_k_neighbors": config.eps_k_neighbors,
+                    "column_used_for_eps": dbscan_debug.eps_column,
+                    **eps_stats,
+                }
+            ]
+        )
+        save_tsv(debug_dir / "06_eps.tsv", eps_frame)
+
+        prefilter_frame = input_order[["clone_id", "source", "original_row_index"]].copy()
+        prefilter_frame["d1"] = dbscan_debug.d1_distances
+        prefilter_frame["eps"] = dbscan_debug.eps
+        prefilter_frame["keep_mask"] = dbscan_debug.keep_mask
+        prefilter_frame["column_used_for_d1"] = dbscan_debug.d1_column
+        save_tsv(debug_dir / "07_d1_prefilter.tsv", prefilter_frame)
+
+        labels_frame = input_order[["clone_id", "source", "original_row_index"]].copy()
+        labels_frame["label"] = clustering_outputs.labels
+        labels_frame["is_noise"] = labels_frame["label"] == -1
+        labels_frame["keep_mask"] = dbscan_debug.keep_mask
+        save_tsv(debug_dir / "08_dbscan_labels.tsv", labels_frame)
+
+        debug_summary = {
+            "n_input": int(len(input_order)),
+            "n_after_pca": int(clustering_outputs.knn.data_reduced.shape[0]),
+            "n_knn": int(clustering_outputs.knn.indices.shape[0]),
+            "eps": float(dbscan_debug.eps),
+            "eps_column": int(dbscan_debug.eps_column),
+            "d1_column": int(dbscan_debug.d1_column),
+            "n_prefilter_removed": int(np.count_nonzero(~dbscan_debug.keep_mask)),
+            "prefilter_removed_fraction": float(np.mean(~dbscan_debug.keep_mask)),
+            "dbscan_min_samples": int(config.cluster_min_samples),
+            "dbscan_n_clusters": int(len(set(clustering_outputs.labels)) - (1 if -1 in clustering_outputs.labels else 0)),
+            "dbscan_n_noise": int(np.count_nonzero(np.asarray(clustering_outputs.labels) == -1)),
+            "n_enriched_clusters": int(artifacts.summary_df.loc[
+                (artifacts.summary_df["enrichment_fdr_zbinom"] < 0.05) & (artifacts.summary_df["log_fold_change"] > 0)
+            ].shape[0]),
+            "n_enriched_clonotypes": int(len(artifacts.enriched_clonotypes_df)),
+        }
+        save_json(debug_dir / "debug_summary.json", debug_summary)
+
+    save_tsv(debug_dir / "09_clusters.tsv", build_cluster_membership_frame(artifacts.cluster_df))
+    save_tsv(debug_dir / "10_enrichment_table.tsv", artifacts.summary_df)
+    save_tsv(debug_dir / "11_enriched_clonotypes.tsv", artifacts.enriched_clonotypes_df)
 
 
 __all__ = [

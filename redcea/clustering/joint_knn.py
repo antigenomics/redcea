@@ -62,7 +62,7 @@ def build_joint_knn_artifacts(
         ind_sb=ind_sb,
         dist_bs=dist_bs,
         ind_bs=ind_bs,
-        k_out=config.k_neighbors + 1,
+        k_out=config.k_neighbors,
     )
     return JointKnnArtifacts(
         data_reduced=df,

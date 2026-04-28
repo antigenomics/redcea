@@ -232,7 +232,9 @@ def compute_split_knn(
 
     Distances are L2 (NOT squared). Strict: NaN/inf -> raise.
     """
-    self_k = int(k_neighbors) + 1
+    # Legacy semantics: k_neighbors is the total number of returned neighbors,
+    # including the self-match in one of the columns.
+    self_k = int(k_neighbors)
 
     if isinstance(sample, pd.DataFrame):
         sample_arr = sample.to_numpy()

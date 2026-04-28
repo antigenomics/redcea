@@ -29,6 +29,28 @@ def knn_neighbor_distances(knn_distances: np.ndarray, neighbor_rank: int) -> np.
     return knn_distances[:, col_idx]
 
 
+def legacy_kth_returned_neighbor_distances(knn_distances: np.ndarray, kth_neighbor: int) -> np.ndarray:
+    """
+    Return distances from the legacy TCRempNet kNN column convention.
+
+    `kth_neighbor` is 1-based over the returned FAISS columns, where column 0
+    is usually the self-match. Thus legacy kth=5 means column 4.
+    """
+    knn_distances = np.asarray(knn_distances)
+    if knn_distances.ndim != 2 or knn_distances.shape[1] < 1:
+        raise ValueError("knn_distances must be a 2D array with at least one neighbor column")
+    if kth_neighbor < 1:
+        raise ValueError("kth_neighbor must be >= 1")
+
+    col_idx = int(kth_neighbor) - 1
+    if col_idx >= knn_distances.shape[1]:
+        raise ValueError(
+            f"kth_neighbor={kth_neighbor} requires column {col_idx}, "
+            f"but knn_distances has only {knn_distances.shape[1]} columns"
+        )
+    return knn_distances[:, col_idx]
+
+
 # === copied 1:1 from your snippet ===
 
 def estimate_dbscan_eps(
@@ -47,7 +69,7 @@ def estimate_dbscan_eps(
         neigh = NearestNeighbors(n_neighbors=n_neighbors)
         nbrs = neigh.fit(data)
         dists, _ = nbrs.kneighbors(data)
-        kth_distances = knn_neighbor_distances(dists, n_neighbors)
+        kth_distances = legacy_kth_returned_neighbor_distances(dists, n_neighbors)
         total_num = len(data)
     else:
         kth_distances = np.asarray(distances)
@@ -98,7 +120,13 @@ def cluster_dbscan(data, eps=None, min_samples=5):
     return labels
 
 
-def cluster_dbscan_with_filter(data, eps=None, min_samples=5, nearest_neighbor_distances=None):
+def cluster_dbscan_with_filter(
+    data,
+    eps=None,
+    min_samples=5,
+    nearest_neighbor_distances=None,
+    return_details: bool = False,
+):
     """
     Legacy TCRempNet DBSCAN:
     pre-filter points with d1 > eps, then run DBSCAN on the remainder.
@@ -129,6 +157,12 @@ def cluster_dbscan_with_filter(data, eps=None, min_samples=5, nearest_neighbor_d
     labels = np.full(n_total, -1, dtype=int)
     if not np.any(mask):
         logging.info("Filtered DBSCAN completed: all points were filtered out before clustering.")
+        if return_details:
+            return labels, {
+                "keep_mask": mask,
+                "filtered_data_size": 0,
+                "n_filtered_out": n_filtered_out,
+            }
         return labels
 
     filtered_data = data[mask]
@@ -146,6 +180,12 @@ def cluster_dbscan_with_filter(data, eps=None, min_samples=5, nearest_neighbor_d
         n_noise,
         elapsed,
     )
+    if return_details:
+        return labels, {
+            "keep_mask": mask,
+            "filtered_data_size": int(filtered_data.shape[0]),
+            "n_filtered_out": n_filtered_out,
+        }
     return labels
 
 
@@ -183,7 +223,7 @@ def estimate_eps_by_group_from_sample(
                 "Merge more (increase min_frac) or reduce kth_neighbor."
             )
 
-        kth = knn_neighbor_distances(sample_ss_distances_l2[idx], kth_neighbor)
+        kth = legacy_kth_returned_neighbor_distances(sample_ss_distances_l2[idx], kth_neighbor)
         eps = estimate_dbscan_eps(
                 data=None,
                 distances=kth,
@@ -295,7 +335,7 @@ def estimate_eps_by_group_flexible(
                 "Merge more (increase min_frac) or reduce kth_neighbor."
             )
         
-        kth = knn_neighbor_distances(dist_matrix[idx], kth_neighbor)
+        kth = legacy_kth_returned_neighbor_distances(dist_matrix[idx], kth_neighbor)
         eps = estimate_dbscan_eps(
             data=None,
             distances=kth,

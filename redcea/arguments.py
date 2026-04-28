@@ -119,6 +119,17 @@ def add_redcea_pipeline_args(parser: argparse.ArgumentParser) -> argparse.Argume
         choices=["asymmetric", "min", "max"],
         help="Symmetrization rule for vDBSCAN.",
     )
+    parser.add_argument(
+        "--debug-save-intermediate",
+        action="store_true",
+        help="Save optional debug artifacts with intermediate arrays, tables, and summaries.",
+    )
+    parser.add_argument(
+        "--debug-output-dir",
+        type=str,
+        default=None,
+        help="Optional custom directory for debug artifacts. Defaults to <output>/debug.",
+    )
     return parser
 
 def build_enrich_parser() -> argparse.ArgumentParser:

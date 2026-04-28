@@ -35,6 +35,8 @@ class PipelineConfig:
     cluster_algo: str
     eps_estimation_based_on: str
     vdbscan_sym_rule: str
+    debug_save_intermediate: bool
+    debug_output_dir: str | None
 
     @classmethod
     def from_args(cls, args: Any) -> "PipelineConfig":
@@ -66,6 +68,8 @@ class PipelineConfig:
             cluster_algo=args.cluster_algo,
             eps_estimation_based_on=args.eps_estimation_based_on,
             vdbscan_sym_rule=args.vdbscan_sym_rule,
+            debug_save_intermediate=getattr(args, "debug_save_intermediate", False),
+            debug_output_dir=getattr(args, "debug_output_dir", None),
         )
 
     @property
