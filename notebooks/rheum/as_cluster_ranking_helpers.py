@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from itertools import combinations
+import warnings
 from pathlib import Path
 import re
 
@@ -171,6 +172,26 @@ class RunTables:
     enriched: pd.DataFrame
 
 
+def detect_run_prefix(run_dir: str | Path) -> str:
+    run_dir = Path(run_dir)
+    summary_matches = sorted(run_dir.glob("*_summary_tcrempnet.tsv"))
+    if summary_matches:
+        return summary_matches[0].name[: -len("_summary_tcrempnet.tsv")]
+
+    cluster_matches = sorted(run_dir.glob("*_tcremp_clusters.tsv"))
+    if cluster_matches:
+        return cluster_matches[0].name[: -len("_tcremp_clusters.tsv")]
+
+    enriched_matches = sorted(run_dir.glob("*_enriched_clonotypes_tcremp*.tsv"))
+    if enriched_matches:
+        name = enriched_matches[0].name
+        for suffix in ("_enriched_clonotypes_tcremp_pgen.tsv", "_enriched_clonotypes_tcremp.tsv"):
+            if name.endswith(suffix):
+                return name[: -len(suffix)]
+
+    raise FileNotFoundError(f"Could not detect run prefix from files in {run_dir}")
+
+
 def normalize_gene(value: object) -> str:
     if pd.isna(value):
         return ""
@@ -187,7 +208,7 @@ def infer_source_from_sample_name(sample_name: str, case_regex: str, control_reg
 
 def load_run_tables(run_dir: str | Path) -> RunTables:
     run_dir = Path(run_dir)
-    prefix = run_dir.name
+    prefix = detect_run_prefix(run_dir)
 
     summary = pd.read_csv(run_dir / f"{prefix}_summary_tcrempnet.tsv", sep="\t")
     clusters = pd.read_csv(run_dir / f"{prefix}_tcremp_clusters.tsv", sep="\t")
@@ -208,7 +229,24 @@ def load_many_runs(runs_root: str | Path, sample_names: list[str] | None = None)
     runs_root = Path(runs_root)
     if sample_names is None:
         sample_names = sorted(path.name for path in runs_root.iterdir() if path.is_dir())
-    return {sample_name: load_run_tables(runs_root / sample_name) for sample_name in sample_names}
+
+    loaded_runs: dict[str, RunTables] = {}
+    failed_samples: list[tuple[str, str]] = []
+
+    for sample_name in sample_names:
+        run_dir = runs_root / sample_name
+        try:
+            loaded_runs[sample_name] = load_run_tables(run_dir)
+        except Exception as exc:
+            message = f"Skipping {sample_name}: {exc}"
+            warnings.warn(message)
+            print(message)
+            failed_samples.append((sample_name, str(exc)))
+
+    if failed_samples:
+        print(f"Loaded {len(loaded_runs)} runs, skipped {len(failed_samples)} runs.")
+
+    return loaded_runs
 
 
 def build_reference_matcher(reference_sequences: list[str]):
