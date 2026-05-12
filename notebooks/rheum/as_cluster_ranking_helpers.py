@@ -106,6 +106,8 @@ def plot_volcano(
     ax=None,
     layers: list[dict] | None = None,
     point_size: int | None = None,
+    y_jitter: float = 0.08,
+    x_clip_quantile: float = 0.98,
 ) -> plt.Axes:
     df = df.copy()
     eps = 1e-10
@@ -114,6 +116,18 @@ def plot_volcano(
         (df["enrichment_fdr_zbinom"] < pval_threshold)
         & (df["log_fold_change"] > fold_threshold)
     )
+    df["significance_label"] = np.where(
+        df["significant"],
+        f"FDR < {pval_threshold} and log2FC > {fold_threshold}",
+        "Other clusters",
+    )
+
+    if y_jitter > 0:
+        rng = np.random.default_rng(42)
+        df["plot_y"] = df["log10_pval"] + rng.uniform(-y_jitter, y_jitter, len(df))
+        df["plot_y"] = df["plot_y"].clip(lower=0)
+    else:
+        df["plot_y"] = df["log10_pval"]
 
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 6))
@@ -121,9 +135,12 @@ def plot_volcano(
     sns.scatterplot(
         data=df,
         x="log_fold_change",
-        y="log10_pval",
-        hue="significant",
-        palette={True: "#ffcb9a", False: "#d2e8e3"},
+        y="plot_y",
+        hue="significance_label",
+        palette={
+            "Other clusters": "#d2e8e3",
+            f"FDR < {pval_threshold} and log2FC > {fold_threshold}": "#ffcb9a",
+        },
         edgecolor="black",
         linewidth=0.3,
         ax=ax,
@@ -139,7 +156,7 @@ def plot_volcano(
             sns.scatterplot(
                 data=df.loc[mask],
                 x="log_fold_change",
-                y="log10_pval",
+                y="plot_y",
                 color=layer.get("color", "#c1121f"),
                 marker=layer.get("marker", "o"),
                 label=layer.get("label", column),
@@ -154,6 +171,13 @@ def plot_volcano(
     ax.set_title(sample_name)
     ax.set_xlabel("log2(Fold Enrichment)")
     ax.set_ylabel("-log10(p-value)")
+
+    if len(df) > 5:
+        x_abs = np.abs(df["log_fold_change"].to_numpy())
+        x_limit = np.quantile(x_abs, x_clip_quantile)
+        x_limit = max(x_limit, fold_threshold + 0.5, 1.5)
+        ax.set_xlim(-x_limit, x_limit)
+
     return ax
 
 
@@ -312,7 +336,7 @@ def plot_sample_volcano_grid(
     fold_threshold: float = 1.0,
     pval_threshold: float = 0.05,
     as_match_threshold: int = 1,
-    figsize_per_panel: tuple[float, float] = (6.0, 4.5),
+    figsize_per_panel: tuple[float, float] = (4.2, 4.6),
 ) -> tuple[plt.Figure, list[pd.DataFrame]]:
     sample_names = list(runs)
     n_samples = len(sample_names)
@@ -344,7 +368,7 @@ def plot_sample_volcano_grid(
             layers=[
                 {
                     "col": "as_pattern",
-                    "label": f"AS clone <= {as_match_threshold} aa mismatch",
+                    "label": "AS exact-match clone" if as_match_threshold == 0 else f"AS clone <= {as_match_threshold} aa mismatch",
                     "color": "#c1121f",
                     "marker": "o",
                 }
