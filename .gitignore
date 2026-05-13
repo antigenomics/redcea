@@ -166,3 +166,8 @@ cython_debug/
 #.idea/
 .idea
 .Rproj.user
+
+# Local scratch / benchmark artifacts
+.tmp/
+bench_redcea_compare/
+*.code-workspace
