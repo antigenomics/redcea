@@ -236,6 +236,15 @@ def _pick_first_existing_column(frame: pd.DataFrame, candidates: tuple[str, ...]
     raise ValueError(f"Could not find {label} column. Tried: {', '.join(candidates)}")
 
 
+def _clean_lookup_value(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return ""
+    return text
+
+
 def build_sequence_patient_lookup_from_airr(
     metadata: pd.DataFrame,
     airr_dir: str | Path,
@@ -278,6 +287,60 @@ def build_sequence_patient_lookup_from_airr(
         selected_samples.append(sample_name)
         for sequence in sequences.unique():
             usage_lookup[sequence].add(sample_name)
+
+    return dict(usage_lookup), selected_samples
+
+
+def build_clonotype_patient_lookup_from_airr(
+    metadata: pd.DataFrame,
+    airr_dir: str | Path,
+    *,
+    sample_name_col: str = "sample_name",
+    disease_status_col: str = "disease_status",
+    selected_disease_status: str = "hd",
+    seq_col_candidates: tuple[str, ...] = ("cdr3aa_beta", "junction_aa", "cdr3aa", "cdr3_aa"),
+    v_col_candidates: tuple[str, ...] = ("v_beta", "v_call", "v"),
+    j_col_candidates: tuple[str, ...] = ("j_beta", "j_call", "j"),
+) -> tuple[dict[tuple[str, str, str], set[str]], list[str]]:
+    airr_dir = Path(airr_dir)
+    if sample_name_col not in metadata.columns:
+        raise ValueError(f"Metadata is missing required column: {sample_name_col}")
+    if disease_status_col not in metadata.columns:
+        raise ValueError(f"Metadata is missing required column: {disease_status_col}")
+
+    usage_lookup: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    selected_samples: list[str] = []
+
+    filtered = metadata.loc[
+        metadata[disease_status_col].astype(str).str.lower().eq(selected_disease_status.lower())
+    ].copy()
+
+    for sample_name in filtered[sample_name_col].dropna().astype(str).unique():
+        sample_file = airr_dir / f"{sample_name}.tsv"
+        if not sample_file.exists():
+            continue
+
+        sample_df = pd.read_csv(sample_file, sep="\t")
+        seq_col = _pick_first_existing_column(sample_df, seq_col_candidates, "sequence")
+        v_col = _pick_first_existing_column(sample_df, v_col_candidates, "V gene")
+        j_col = _pick_first_existing_column(sample_df, j_col_candidates, "J gene")
+
+        key_frame = sample_df[[seq_col, v_col, j_col]].copy()
+        key_frame.columns = ["sequence", "v_gene", "j_gene"]
+        key_frame["sequence"] = key_frame["sequence"].map(_clean_lookup_value)
+        key_frame["v_gene"] = key_frame["v_gene"].map(_clean_lookup_value)
+        key_frame["j_gene"] = key_frame["j_gene"].map(_clean_lookup_value)
+        key_frame = key_frame[
+            key_frame["sequence"].ne("")
+            & key_frame["v_gene"].ne("")
+            & key_frame["j_gene"].ne("")
+        ].drop_duplicates()
+        if key_frame.empty:
+            continue
+
+        selected_samples.append(sample_name)
+        for sequence, v_gene, j_gene in key_frame.itertuples(index=False, name=None):
+            usage_lookup[(sequence, v_gene, j_gene)].add(sample_name)
 
     return dict(usage_lookup), selected_samples
 
@@ -608,6 +671,7 @@ def summarize_merged_clusters(
     external_control_usage: dict[str, set[str]] | None = None,
     external_control_total: int | None = None,
     control_seq_col: str = "cdr3aa_beta",
+    external_control_match_cols: tuple[str, ...] | None = None,
 ) -> pd.DataFrame:
     cluster_sizes = df.groupby(merged_col).size().rename("cluster_size")
     sample_counts = (
@@ -642,6 +706,7 @@ def summarize_merged_clusters(
 
     summary["sample_fraction"] = summary["sample"] / summary["cluster_size"].clip(lower=1)
     summary["background_fraction"] = summary["background"] / summary["cluster_size"].clip(lower=1)
+    summary["n_patients"] = summary["n_samples"]
 
     group_presence = (
         df.groupby([merged_col, "sample_group", "sample_name"])
@@ -667,8 +732,19 @@ def summarize_merged_clusters(
         control_usage_counts: dict[object, int] = {}
         for cluster_id, cluster_df in df.groupby(merged_col):
             patients: set[str] = set()
-            for sequence in cluster_df[control_seq_col].dropna().astype(str).unique():
-                patients |= external_control_usage.get(sequence, set())
+            if external_control_match_cols:
+                key_rows = cluster_df.loc[:, list(external_control_match_cols)].drop_duplicates()
+                for row in key_rows.itertuples(index=False, name=None):
+                    key = tuple(_clean_lookup_value(value) for value in row)
+                    if any(not value for value in key):
+                        continue
+                    patients |= external_control_usage.get(key, set())
+            else:
+                for sequence in cluster_df[control_seq_col].dropna().astype(str).unique():
+                    cleaned_sequence = _clean_lookup_value(sequence)
+                    if not cleaned_sequence:
+                        continue
+                    patients |= external_control_usage.get(cleaned_sequence, set())
             control_usage_counts[cluster_id] = len(patients)
         control_usage = pd.Series(control_usage_counts, name="h_usage")
 
@@ -713,6 +789,7 @@ def rank_clusters_with_topsis(
     min_samples: int = 2,
     metric_types: dict[str, str] | None = None,
     weights: dict[str, float] | None = None,
+    require_positive_log_patient_fc: bool = False,
 ) -> pd.DataFrame:
     if metric_types is None:
         metric_types = {
@@ -725,6 +802,10 @@ def rank_clusters_with_topsis(
         }
 
     ranked_input = summary.loc[summary["n_samples"] >= min_samples].copy()
+    if require_positive_log_patient_fc:
+        ranked_input = ranked_input.loc[ranked_input["log_patient_fc"] > 0].copy()
+    if "n_patients" not in ranked_input.columns and "n_samples" in ranked_input.columns:
+        ranked_input["n_patients"] = ranked_input["n_samples"]
     ranked = compute_topsis_score(ranked_input, metric_types, weight_dict=weights)
     ranked.insert(0, "rank", np.arange(1, len(ranked) + 1))
     return ranked
