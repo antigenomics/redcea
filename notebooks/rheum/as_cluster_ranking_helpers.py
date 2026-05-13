@@ -107,7 +107,7 @@ def plot_volcano(
     layers: list[dict] | None = None,
     point_size: int | None = None,
     y_jitter: float = 0.08,
-    x_clip_quantile: float = 0.98,
+    show_legend: bool = True,
 ) -> plt.Axes:
     df = df.copy()
     eps = 1e-10
@@ -167,16 +167,21 @@ def plot_volcano(
             )
 
     ax.axvline(fold_threshold, linestyle="--", color="black")
-    ax.axhline(-np.log10(pval_threshold + eps), linestyle="--", color="black")
+    fdr_selected = df.loc[df["enrichment_fdr_zbinom"] < pval_threshold, "enrichment_pvalue_zbinom"]
+    if len(fdr_selected):
+        fdr_line_y = -np.log10(float(fdr_selected.max()) + eps)
+        ax.axhline(fdr_line_y, linestyle="--", color="black")
     ax.set_title(sample_name)
     ax.set_xlabel("log2(Fold Enrichment)")
     ax.set_ylabel("-log10(p-value)")
+    ax.set_xscale("symlog", linthresh=1.0, linscale=1.0, base=2)
 
-    if len(df) > 5:
-        x_abs = np.abs(df["log_fold_change"].to_numpy())
-        x_limit = np.quantile(x_abs, x_clip_quantile)
-        x_limit = max(x_limit, fold_threshold + 0.5, 1.5)
-        ax.set_xlim(-x_limit, x_limit)
+    legend = ax.get_legend()
+    if legend is not None:
+        if show_legend:
+            legend.set_title("")
+        else:
+            legend.remove()
 
     return ax
 
@@ -332,11 +337,11 @@ def plot_sample_volcano_grid(
     runs: dict[str, RunTables],
     matcher,
     *,
-    samples_per_row: int = 3,
+    samples_per_row: int = 5,
     fold_threshold: float = 1.0,
     pval_threshold: float = 0.05,
     as_match_threshold: int = 1,
-    figsize_per_panel: tuple[float, float] = (4.2, 4.6),
+    figsize_per_panel: tuple[float, float] = (3.4, 4.2),
 ) -> tuple[plt.Figure, list[pd.DataFrame]]:
     sample_names = list(runs)
     n_samples = len(sample_names)
@@ -374,6 +379,7 @@ def plot_sample_volcano_grid(
                 }
             ],
             point_size=45,
+            show_legend=(idx == 0),
         )
         summaries.append(summary)
 
@@ -466,6 +472,12 @@ def prepare_merged_clonotypes(
     frames = []
     for sample_name, run in runs.items():
         sample_enriched = run.enriched.copy()
+        if "source" not in sample_enriched.columns:
+            sample_enriched["source"] = np.where(
+                sample_enriched["clone_id"].astype(str).str.startswith("b_"),
+                "background",
+                "sample",
+            )
         sample_enriched["sample_name"] = sample_name
         sample_enriched["sample_group"] = infer_source_from_sample_name(
             sample_name,
