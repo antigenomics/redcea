@@ -132,6 +132,7 @@ def plot_volcano(
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 6))
 
+    base_size = point_size if point_size else 36
     sns.scatterplot(
         data=df,
         x="log_fold_change",
@@ -144,7 +145,7 @@ def plot_volcano(
         edgecolor="black",
         linewidth=0.3,
         ax=ax,
-        **({"s": point_size} if point_size else {}),
+        s=base_size,
     )
 
     if layers:
@@ -161,9 +162,10 @@ def plot_volcano(
                 marker=layer.get("marker", "o"),
                 label=layer.get("label", column),
                 edgecolor="black",
-                linewidth=0.4,
+                linewidth=0.8,
                 ax=ax,
-                **({"s": point_size} if point_size else {}),
+                s=layer.get("size", max(base_size * 2.6, 90)),
+                zorder=5,
             )
 
     ax.axvline(fold_threshold, linestyle="--", color="black")
@@ -337,11 +339,11 @@ def plot_sample_volcano_grid(
     runs: dict[str, RunTables],
     matcher,
     *,
-    samples_per_row: int = 5,
+    samples_per_row: int = 9,
     fold_threshold: float = 1.0,
     pval_threshold: float = 0.05,
     as_match_threshold: int = 1,
-    figsize_per_panel: tuple[float, float] = (3.4, 4.2),
+    figsize_per_panel: tuple[float, float] = (3.4, 3.4),
 ) -> tuple[plt.Figure, list[pd.DataFrame]]:
     sample_names = list(runs)
     n_samples = len(sample_names)
@@ -356,6 +358,8 @@ def plot_sample_volcano_grid(
     )
 
     summaries = []
+    legend_handles = None
+    legend_labels = None
     for idx, sample_name in enumerate(sample_names):
         row, col = divmod(idx, n_cols)
         ax = axes[row][col]
@@ -376,18 +380,43 @@ def plot_sample_volcano_grid(
                     "label": "AS exact-match clone" if as_match_threshold == 0 else f"AS clone <= {as_match_threshold} aa mismatch",
                     "color": "#c1121f",
                     "marker": "o",
+                    "size": 120,
                 }
             ],
             point_size=45,
-            show_legend=(idx == 0),
+            show_legend=False,
         )
+
+        if summary["as_pattern"].fillna(False).any():
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#c1121f")
+                spine.set_linewidth(2.2)
+
+        if legend_handles is None:
+            handles, labels = ax.get_legend_handles_labels()
+            if handles and labels:
+                legend_handles, legend_labels = handles, labels
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+
         summaries.append(summary)
 
     for idx in range(n_samples, n_rows * n_cols):
         row, col = divmod(idx, n_cols)
         axes[row][col].axis("off")
 
-    fig.tight_layout()
+    if legend_handles and legend_labels:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            ncol=min(3, len(legend_labels)),
+            frameon=True,
+            bbox_to_anchor=(0.5, 1.02),
+        )
+
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     return fig, summaries
 
 
@@ -411,11 +440,17 @@ def merge_clusters_by_cdr3_threshold(
     cluster_col: str = "cluster_uid",
     seq_col: str = "cdr3aa_beta",
     merged_col: str = "merged_cluster_id",
+    source_col: str = "source",
+    merge_source_value: str = "sample",
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     adjacency: dict[str, set[str]] = defaultdict(set)
     seq_key_to_clusters: dict[tuple[int, str], set[str]] = defaultdict(set)
 
-    for _, row in df[[cluster_col, seq_col]].drop_duplicates().iterrows():
+    merge_df = df.copy()
+    if source_col in merge_df.columns:
+        merge_df = merge_df[merge_df[source_col] == merge_source_value]
+
+    for _, row in merge_df[[cluster_col, seq_col]].drop_duplicates().iterrows():
         cluster_id = row[cluster_col]
         sequence = str(row[seq_col])
         wildcard_keys = {sequence} if substitutions <= 0 else _wildcard_neighbors(sequence, substitutions)

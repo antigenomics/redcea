@@ -10,9 +10,11 @@
 
 set -eu
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
+SCRIPT_DIR="$SUBMIT_DIR/scripts"
 TARGET_GLOB="/projects/immunestatus/rheum/redcea/runs/as_*/*_enriched_clonotypes_tcremp.tsv"
 
+echo "Submit dir: $SUBMIT_DIR"
 echo "Script dir: $SCRIPT_DIR"
 echo "Searching files: $TARGET_GLOB"
 
