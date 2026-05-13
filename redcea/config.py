@@ -35,6 +35,7 @@ class PipelineConfig:
     cluster_algo: str
     eps_estimation_based_on: str
     vdbscan_sym_rule: str
+    enrichment_test: str
     debug_save_intermediate: bool
     debug_output_dir: str | None
 
@@ -68,6 +69,7 @@ class PipelineConfig:
             cluster_algo=args.cluster_algo,
             eps_estimation_based_on=args.eps_estimation_based_on,
             vdbscan_sym_rule=args.vdbscan_sym_rule,
+            enrichment_test=getattr(args, "enrichment_test", "zbinom"),
             debug_save_intermediate=getattr(args, "debug_save_intermediate", False),
             debug_output_dir=getattr(args, "debug_output_dir", None),
         )

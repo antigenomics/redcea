@@ -3,8 +3,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from redcea.analysis.io import get_enrichment_column_names
 from redcea.utils.paths import resolve_embedding_file
-from redcea.utils.stats import _fdr_bh, add_log_fold_change, add_z_binom_pvalues
+from redcea.utils.stats import _fdr_bh, add_binom_pvalues, add_log_fold_change, add_z_binom_pvalues
 
 
 def test_fdr_bh_returns_monotone_qvalues_in_original_order():
@@ -48,3 +49,22 @@ def test_enrichment_helpers_add_expected_columns():
     assert np.all((summary["enrichment_fdr_zbinom"] >= 0) & (summary["enrichment_fdr_zbinom"] <= 1))
     assert summary.loc[summary["cluster_id"] == 1, "log_fold_change"].iat[0] > 0
     assert summary.loc[summary["cluster_id"] == 3, "log_fold_change"].iat[0] < 0
+
+
+def test_binom_helper_and_enrichment_column_names():
+    summary = pd.DataFrame(
+        {
+            "cluster_id": [1, 2],
+            "sample": [10, 1],
+            "background": [2, 8],
+        }
+    )
+
+    summary = add_binom_pvalues(summary, total_sample=20, total_background=20)
+    pvalue_col, fdr_col = get_enrichment_column_names("binom")
+
+    assert pvalue_col == "enrichment_pvalue_binom"
+    assert fdr_col == "enrichment_fdr_binom"
+    assert pvalue_col in summary.columns
+    assert fdr_col in summary.columns
+    assert np.all((summary[fdr_col] >= 0) & (summary[fdr_col] <= 1))

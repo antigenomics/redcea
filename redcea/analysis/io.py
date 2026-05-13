@@ -8,6 +8,16 @@ from pathlib import Path
 import pandas as pd
 
 from redcea.utils.paths import resolve_embedding_file, resolve_index_file
+
+
+def get_enrichment_column_names(enrichment_test: str) -> tuple[str, str]:
+    if enrichment_test == "zbinom":
+        return "enrichment_pvalue_zbinom", "enrichment_fdr_zbinom"
+    if enrichment_test == "binom":
+        return "enrichment_pvalue_binom", "enrichment_fdr_binom"
+    if enrichment_test == "fisher":
+        return "enrichment_pvalue_fisher", "enrichment_fdr_fisher"
+    raise ValueError(f"Unsupported enrichment_test: {enrichment_test}")
 from redcea.utils.tcremp import get_representations_df, load_analysis_repertoire, subsample_repertoire
 
 
@@ -104,9 +114,16 @@ def load_embedding_artifacts(path, args, is_sample, lib, locus, prefix, output_p
     )
 
 
-def save_pipeline_outputs(artifacts: PipelineArtifacts, *, output_path, prefix: str) -> None:
+def save_pipeline_outputs(
+    artifacts: PipelineArtifacts,
+    *,
+    output_path,
+    prefix: str,
+    enrichment_test: str = "zbinom",
+) -> None:
     """Persist the standard RedCEA output tables to disk."""
     output_path = Path(output_path)
+    pvalue_col, fdr_col = get_enrichment_column_names(enrichment_test)
 
     artifacts.cluster_df.to_csv(output_path / f"{prefix}_tcremp_clusters.tsv", sep="\t", index=False)
     logging.info("Saved cluster assignments.")
@@ -117,8 +134,8 @@ def save_pipeline_outputs(artifacts: PipelineArtifacts, *, output_path, prefix: 
             "cluster_size",
             "sample",
             "background",
-            "enrichment_pvalue_zbinom",
-            "enrichment_fdr_zbinom",
+            pvalue_col,
+            fdr_col,
             "log_fold_change",
         ]
     ].to_csv(output_path / f"{prefix}_summary_tcrempnet.tsv", sep="\t", index=False)
@@ -133,6 +150,7 @@ def save_pipeline_outputs(artifacts: PipelineArtifacts, *, output_path, prefix: 
 __all__ = [
     "EmbeddingArtifacts",
     "PipelineArtifacts",
+    "get_enrichment_column_names",
     "get_clonotypes",
     "get_sample_info",
     "load_embedding_artifacts",

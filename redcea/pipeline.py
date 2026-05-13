@@ -11,7 +11,13 @@ import pandas as pd
 from mir.common.segments import SegmentLibrary
 
 from redcea.analysis.cluster_utils import compute_cluster_summary
-from redcea.analysis.io import EmbeddingArtifacts, PipelineArtifacts, load_embedding_artifacts, save_pipeline_outputs
+from redcea.analysis.io import (
+    EmbeddingArtifacts,
+    PipelineArtifacts,
+    get_enrichment_column_names,
+    load_embedding_artifacts,
+    save_pipeline_outputs,
+)
 from redcea.clustering import build_joint_knn_artifacts, run_joint_clustering
 from redcea.clustering.cluster_methods import JointDbscanDebugArtifacts, run_joint_dbscan_clustering_with_diagnostics
 from redcea.config import PipelineConfig, normalize_pipeline_config
@@ -26,7 +32,7 @@ from redcea.debug import (
 )
 from redcea.embeddings import compute_embeddings_if_needed
 from redcea.utils.paths import resolve_prototype_file
-from redcea.utils.stats import add_log_fold_change, add_z_binom_pvalues
+from redcea.utils.stats import add_binom_pvalues, add_fisher_pvalues, add_log_fold_change, add_z_binom_pvalues
 from redcea.utils.tcremp import (
     configure_logging,
     generate_output_prefix,
@@ -54,6 +60,22 @@ class ClusteringOutputs:
     labels: np.ndarray
     knn: object
     dbscan_debug: JointDbscanDebugArtifacts | None = None
+
+
+def _add_enrichment_pvalues(
+    summary_df: pd.DataFrame,
+    *,
+    config: PipelineConfig,
+    total_sample: int,
+    total_background: int,
+) -> pd.DataFrame:
+    if config.enrichment_test == "zbinom":
+        return add_z_binom_pvalues(summary_df, total_sample=total_sample, total_background=total_background)
+    if config.enrichment_test == "binom":
+        return add_binom_pvalues(summary_df, total_sample=total_sample, total_background=total_background)
+    if config.enrichment_test == "fisher":
+        return add_fisher_pvalues(summary_df, total_sample=total_sample, total_background=total_background)
+    raise ValueError(f"Unsupported enrichment_test: {config.enrichment_test}")
 
 
 def prepare_runtime_context(args) -> RuntimeContext:
@@ -123,6 +145,7 @@ def compute_cluster_labels(
 
 def build_pipeline_artifacts(
     *,
+    config: PipelineConfig,
     cluster_labels,
     joint_ids: pd.Series,
     joint_representations: pd.DataFrame,
@@ -137,14 +160,24 @@ def build_pipeline_artifacts(
         joint_representations=joint_representations,
     )
     summary_df = compute_cluster_summary(cluster_df, sample_ids)
-    summary_df = add_z_binom_pvalues(summary_df, total_sample=len(sample_ids), total_background=len(background_ids))
+    summary_df = _add_enrichment_pvalues(
+        summary_df,
+        config=config,
+        total_sample=len(sample_ids),
+        total_background=len(background_ids),
+    )
     summary_df = add_log_fold_change(summary_df, total_sample=len(sample_ids), total_background=len(background_ids))
+    pvalue_col, fdr_col = get_enrichment_column_names(config.enrichment_test)
 
     enriched_clusters = summary_df.loc[
-        (summary_df["enrichment_fdr_zbinom"] < 0.05) & (summary_df["log_fold_change"] > 0),
-        ["cluster_id", "enrichment_pvalue_zbinom"],
+        (summary_df[fdr_col] < 0.05) & (summary_df["log_fold_change"] > 0),
+        ["cluster_id", pvalue_col],
     ]
-    logging.info("%d clusters identified as enriched (fdr < 0.05, logFC > 0).", len(enriched_clusters))
+    logging.info(
+        "%d clusters identified as enriched by %s (fdr < 0.05, logFC > 0).",
+        len(enriched_clusters),
+        config.enrichment_test,
+    )
 
     enriched_clonotypes_df = cluster_df.merge(enriched_clusters, on="cluster_id")
 
@@ -249,6 +282,7 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     )
 
     artifacts = build_pipeline_artifacts(
+        config=config,
         cluster_labels=clustering_outputs.labels,
         joint_ids=joint_ids,
         joint_representations=joint_representations,
@@ -268,7 +302,12 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     del sample_artifacts.embeddings
     del background_artifacts.embeddings
     gc.collect()
-    save_pipeline_outputs(artifacts, output_path=runtime.output_path, prefix=runtime.prefix)
+    save_pipeline_outputs(
+        artifacts,
+        output_path=runtime.output_path,
+        prefix=runtime.prefix,
+        enrichment_test=config.enrichment_test,
+    )
 
     logging.info("RedCEA pipeline completed.")
     log_memory_usage("Finished")
@@ -286,6 +325,7 @@ def _save_debug_outputs(
     clustering_outputs: ClusteringOutputs,
 ) -> None:
     debug_dir = prepare_debug_dir(runtime.output_path, config.debug_output_dir)
+    _, fdr_col = get_enrichment_column_names(config.enrichment_test)
     input_order = build_input_order_frame(joint_representations, sample_size=len(sample_embeddings))
     save_tsv(debug_dir / "01_input_order.tsv", input_order)
 
@@ -337,8 +377,9 @@ def _save_debug_outputs(
             "dbscan_min_samples": int(config.cluster_min_samples),
             "dbscan_n_clusters": int(len(set(clustering_outputs.labels)) - (1 if -1 in clustering_outputs.labels else 0)),
             "dbscan_n_noise": int(np.count_nonzero(np.asarray(clustering_outputs.labels) == -1)),
+            "enrichment_test": config.enrichment_test,
             "n_enriched_clusters": int(artifacts.summary_df.loc[
-                (artifacts.summary_df["enrichment_fdr_zbinom"] < 0.05) & (artifacts.summary_df["log_fold_change"] > 0)
+                (artifacts.summary_df[fdr_col] < 0.05) & (artifacts.summary_df["log_fold_change"] > 0)
             ].shape[0]),
             "n_enriched_clonotypes": int(len(artifacts.enriched_clonotypes_df)),
         }

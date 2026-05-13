@@ -120,6 +120,13 @@ def add_redcea_pipeline_args(parser: argparse.ArgumentParser) -> argparse.Argume
         help="Symmetrization rule for vDBSCAN.",
     )
     parser.add_argument(
+        "--enrichment-test",
+        type=str,
+        default="zbinom",
+        choices=["zbinom", "binom", "fisher"],
+        help="Statistical test used for cluster enrichment.",
+    )
+    parser.add_argument(
         "--debug-save-intermediate",
         action="store_true",
         help="Save optional debug artifacts with intermediate arrays, tables, and summaries.",

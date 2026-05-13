@@ -86,6 +86,7 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
         leiden_sub_resolution=1.0,
         eps_estimation_based_on="sample",
         vdbscan_sym_rule="asymmetric",
+        enrichment_test="binom",
     )
 
     monkeypatch.setattr(pipeline, "configure_logging", lambda *args, **kwargs: None)
@@ -176,4 +177,6 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
     assert not artifacts.summary_df.empty
     assert set(clusters["source"]) == {"sample", "background"}
     assert {"cluster_id", "cluster_size", "sample", "background", "log_fold_change"} <= set(summary.columns)
+    assert "enrichment_pvalue_binom" in summary.columns
+    assert "enrichment_fdr_binom" in summary.columns
     assert not enriched.empty
