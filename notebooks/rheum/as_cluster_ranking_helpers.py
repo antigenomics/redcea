@@ -229,6 +229,59 @@ def normalize_gene(value: object) -> str:
     return re.sub(r"\*.*$", "", str(value))
 
 
+def _pick_first_existing_column(frame: pd.DataFrame, candidates: tuple[str, ...], label: str) -> str:
+    for column in candidates:
+        if column in frame.columns:
+            return column
+    raise ValueError(f"Could not find {label} column. Tried: {', '.join(candidates)}")
+
+
+def build_sequence_patient_lookup_from_airr(
+    metadata: pd.DataFrame,
+    airr_dir: str | Path,
+    *,
+    sample_name_col: str = "sample_name",
+    disease_status_col: str = "disease_status",
+    selected_disease_status: str = "hd",
+    seq_col_candidates: tuple[str, ...] = ("cdr3aa_beta", "junction_aa", "cdr3aa", "cdr3_aa"),
+) -> tuple[dict[str, set[str]], list[str]]:
+    airr_dir = Path(airr_dir)
+    if sample_name_col not in metadata.columns:
+        raise ValueError(f"Metadata is missing required column: {sample_name_col}")
+    if disease_status_col not in metadata.columns:
+        raise ValueError(f"Metadata is missing required column: {disease_status_col}")
+
+    usage_lookup: dict[str, set[str]] = defaultdict(set)
+    selected_samples: list[str] = []
+
+    filtered = metadata.loc[
+        metadata[disease_status_col].astype(str).str.lower().eq(selected_disease_status.lower())
+    ].copy()
+
+    for sample_name in filtered[sample_name_col].dropna().astype(str).unique():
+        sample_file = airr_dir / f"{sample_name}.tsv"
+        if not sample_file.exists():
+            continue
+
+        sample_df = pd.read_csv(sample_file, sep="\t")
+        seq_col = _pick_first_existing_column(sample_df, seq_col_candidates, "sequence")
+        sequences = (
+            sample_df[seq_col]
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+        sequences = sequences[sequences.ne("") & ~sequences.str.lower().eq("nan")]
+        if sequences.empty:
+            continue
+
+        selected_samples.append(sample_name)
+        for sequence in sequences.unique():
+            usage_lookup[sequence].add(sample_name)
+
+    return dict(usage_lookup), selected_samples
+
+
 def infer_source_from_sample_name(sample_name: str, case_regex: str, control_regex: str) -> str:
     if re.search(case_regex, sample_name):
         return "case"
@@ -552,6 +605,9 @@ def summarize_merged_clusters(
     source_col: str = "source",
     case_group: str = "case",
     control_group: str = "control",
+    external_control_usage: dict[str, set[str]] | None = None,
+    external_control_total: int | None = None,
+    control_seq_col: str = "cdr3aa_beta",
 ) -> pd.DataFrame:
     cluster_sizes = df.groupby(merged_col).size().rename("cluster_size")
     sample_counts = (
@@ -599,19 +655,32 @@ def summarize_merged_clusters(
         .nunique()
         .rename("as_usage")
     )
-    control_usage = (
-        group_presence[group_presence["sample_group"] == control_group]
-        .groupby(merged_col)["sample_name"]
-        .nunique()
-        .rename("h_usage")
-    )
+
+    if external_control_usage is None:
+        control_usage = (
+            group_presence[group_presence["sample_group"] == control_group]
+            .groupby(merged_col)["sample_name"]
+            .nunique()
+            .rename("h_usage")
+        )
+    else:
+        control_usage_counts: dict[object, int] = {}
+        for cluster_id, cluster_df in df.groupby(merged_col):
+            patients: set[str] = set()
+            for sequence in cluster_df[control_seq_col].dropna().astype(str).unique():
+                patients |= external_control_usage.get(sequence, set())
+            control_usage_counts[cluster_id] = len(patients)
+        control_usage = pd.Series(control_usage_counts, name="h_usage")
 
     summary = summary.join(case_usage, on=merged_col).join(control_usage, on=merged_col)
     summary["as_usage"] = summary["as_usage"].fillna(0).astype(int)
     summary["h_usage"] = summary["h_usage"].fillna(0).astype(int)
 
     total_case = max(df.loc[df["sample_group"] == case_group, "sample_name"].nunique(), 1)
-    total_control = max(df.loc[df["sample_group"] == control_group, "sample_name"].nunique(), 1)
+    if external_control_total is None:
+        total_control = max(df.loc[df["sample_group"] == control_group, "sample_name"].nunique(), 1)
+    else:
+        total_control = max(int(external_control_total), 1)
 
     fisher_p_values = []
     patient_fc_values = []
