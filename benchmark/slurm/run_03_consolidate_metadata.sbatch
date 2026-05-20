@@ -17,4 +17,6 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
-python benchmark/run_benchmark.py --mode consolidate
+echo "[$(date)] Starting metadata consolidation in $(pwd)"
+python -u benchmark/run_benchmark.py --mode consolidate
+echo "[$(date)] Finished metadata consolidation"

@@ -181,13 +181,26 @@ def _load_dataset_frame(processed_dir, dataset_mode, dataset, donor_id=None):
 
 def execute_single_manifest_row(manifest_row, processed_dir, runner):
     params = json.loads(manifest_row["parameter_json"])
+    print(
+        "Starting run_id={0} dataset_mode={1} dataset={2} donor_id={3} epitope={4} method={5} params={6}".format(
+            manifest_row["run_id"],
+            manifest_row["dataset_mode"],
+            manifest_row["dataset"],
+            manifest_row.get("donor_id"),
+            manifest_row.get("epitope"),
+            manifest_row["method"],
+            manifest_row["parameter_json"],
+        ),
+        flush=True,
+    )
     frame = _load_dataset_frame(
         processed_dir,
         dataset_mode=manifest_row["dataset_mode"],
         dataset=manifest_row["dataset"],
         donor_id=manifest_row.get("donor_id"),
     )
-    return runner.run(
+    print("Loaded input frame for {0}: n_rows={1}, n_cols={2}".format(manifest_row["run_id"], len(frame), len(frame.columns)), flush=True)
+    result = runner.run(
         frame,
         dataset=manifest_row["dataset"],
         dataset_mode=manifest_row["dataset_mode"],
@@ -197,6 +210,18 @@ def execute_single_manifest_row(manifest_row, processed_dir, runner):
         donor_id=None if pd.isna(manifest_row.get("donor_id")) else str(manifest_row.get("donor_id")),
         run_id=manifest_row["run_id"],
     )
+    print(
+        "Finished run_id={0} status={1} n_points={2} n_clusters={3} n_noise={4} runtime_seconds={5}".format(
+            result.run_id,
+            result.metadata.get("status"),
+            result.metadata.get("n_points"),
+            result.metadata.get("n_clusters"),
+            result.metadata.get("n_noise"),
+            result.metadata.get("runtime_seconds"),
+        ),
+        flush=True,
+    )
+    return result
 
 
 def execute_manifest(manifest, processed_dir, runner):
@@ -240,9 +265,16 @@ def parse_args():
 def main():
     args = parse_args()
     if args.mode == "consolidate":
-        consolidate_run_metadata(
+        consolidated = consolidate_run_metadata(
             metadata_parts_dir=args.metadata_parts_dir,
             metadata_path=args.run_metadata_path,
+        )
+        print(
+            "Consolidated run metadata: {0} rows -> {1}".format(
+                len(consolidated),
+                args.run_metadata_path,
+            ),
+            flush=True,
         )
         return 0
 
@@ -256,6 +288,14 @@ def main():
             pca_components=args.pca_components,
         )
         manifest = pd.read_csv(args.single_manifest_path, sep="\t")
+        print(
+            "Array task row={0} manifest={1} manifest_rows={2}".format(
+                args.single_row_index,
+                args.single_manifest_path,
+                len(manifest),
+            ),
+            flush=True,
+        )
         row = manifest.iloc[int(args.single_row_index) - 1]
         execute_single_manifest_row(row, args.processed_dir, runner)
         return 0
