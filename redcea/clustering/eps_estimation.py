@@ -5,7 +5,10 @@ from typing import Dict
 import numpy as np
 from sklearn.cluster import DBSCAN
 from sklearn.neighbors import NearestNeighbors
-from kneed import KneeLocator
+try:
+    from kneed import KneeLocator
+except Exception:  # pragma: no cover - optional dependency at import time
+    KneeLocator = None
 
 
 def knn_neighbor_distances(knn_distances: np.ndarray, neighbor_rank: int) -> np.ndarray:
@@ -87,18 +90,27 @@ def estimate_dbscan_eps(
 
     distances_sorted = np.sort(chosen_elements)
 
-    knee = KneeLocator(
-        range(1, len(distances_sorted) + 1),
-        distances_sorted,
-        S=1.0,
-        curve="concave",
-        interp_method="polynomial",
-        polynomial_degree=poly_degree,
-        online=True,
-        direction="increasing",
-    )
+    if KneeLocator is not None:
+        knee = KneeLocator(
+            range(1, len(distances_sorted) + 1),
+            distances_sorted,
+            S=1.0,
+            curve="concave",
+            interp_method="polynomial",
+            polynomial_degree=poly_degree,
+            online=True,
+            direction="increasing",
+        )
+        knee_index = knee.knee
+    else:
+        knee_index = None
 
-    eps = distances_sorted[knee.knee]
+    if knee_index is None:
+        x = np.linspace(0.0, 1.0, len(distances_sorted))
+        baseline = distances_sorted[0] + x * (distances_sorted[-1] - distances_sorted[0])
+        knee_index = int(np.argmax(distances_sorted - baseline))
+
+    eps = distances_sorted[int(knee_index)]
 
     logging.info(
         f"Estimated eps for DBSCAN: {eps:.4f}, total time: {(time.time() - start):.2f} sec."
