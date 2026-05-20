@@ -60,8 +60,33 @@ def infer_chain(frame: pd.DataFrame, default: str = "TRB") -> pd.Series:
     return pd.Series([default] * len(frame), index=frame.index, dtype="object")
 
 
+def is_metadata_numeric_column(column: object) -> bool:
+    name = str(column).lower()
+    metadata_tokens = [
+        "id",
+        "index",
+        "clone",
+        "count",
+        "freq",
+        "fraction",
+        "size",
+        "length",
+        "len",
+        "timepoint",
+        "padj",
+        "pvalue",
+        "qvalue",
+    ]
+    return any(token in name for token in metadata_tokens)
+
+
+def infer_numeric_embedding_columns(frame: pd.DataFrame) -> list[object]:
+    numeric_columns = list(frame.select_dtypes(include=[np.number]).columns)
+    return [column for column in numeric_columns if not is_metadata_numeric_column(column)]
+
+
 def split_embedding_metadata(frame: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
-    emb_cols = [column for column in frame.columns if column.startswith("emb_")]
+    emb_cols = [column for column in frame.columns if str(column).startswith("emb_")]
     if "embedding" in frame.columns:
         embedding_array = np.asarray(frame["embedding"].tolist(), dtype=np.float32)
         metadata = frame.drop(columns=["embedding"]).copy()
@@ -70,7 +95,14 @@ def split_embedding_metadata(frame: pd.DataFrame) -> tuple[pd.DataFrame, np.ndar
         embedding_array = frame[emb_cols].to_numpy(dtype=np.float32, copy=False)
         metadata = frame.drop(columns=emb_cols).copy()
         return metadata, embedding_array
-    raise KeyError("Expected either an 'embedding' column or 'emb_*' columns in embedding parquet.")
+    numeric_embedding_cols = infer_numeric_embedding_columns(frame)
+    if numeric_embedding_cols:
+        embedding_array = frame[numeric_embedding_cols].to_numpy(dtype=np.float32, copy=False)
+        metadata = frame.drop(columns=numeric_embedding_cols).copy()
+        return metadata, embedding_array
+    raise KeyError(
+        "Expected an 'embedding' column, 'emb_*' columns, or numeric coordinate columns in embedding parquet."
+    )
 
 
 def add_embedding_columns(frame: pd.DataFrame, embedding_array: np.ndarray) -> pd.DataFrame:

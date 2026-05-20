@@ -26,10 +26,32 @@ from redcea.clustering.vdbscan import vdbscan_from_knn
 def extract_embeddings(df: pd.DataFrame) -> np.ndarray:
     if "embedding" in df.columns:
         return np.asarray(df["embedding"].tolist(), dtype=np.float32)
-    emb_cols = [col for col in df.columns if col.startswith("emb_")]
-    if not emb_cols:
-        raise KeyError("Expected either an 'embedding' column or 'emb_*' columns.")
-    return df[emb_cols].to_numpy(dtype=np.float32, copy=False)
+    emb_cols = [col for col in df.columns if str(col).startswith("emb_")]
+    if emb_cols:
+        return df[emb_cols].to_numpy(dtype=np.float32, copy=False)
+
+    metadata_tokens = [
+        "id",
+        "index",
+        "clone",
+        "count",
+        "freq",
+        "fraction",
+        "size",
+        "length",
+        "len",
+        "timepoint",
+        "padj",
+        "pvalue",
+        "qvalue",
+    ]
+    numeric_cols = list(df.select_dtypes(include=[np.number]).columns)
+    embedding_cols = [
+        col for col in numeric_cols if not any(token in str(col).lower() for token in metadata_tokens)
+    ]
+    if not embedding_cols:
+        raise KeyError("Expected an 'embedding' column, 'emb_*' columns, or numeric coordinate columns.")
+    return df[embedding_cols].to_numpy(dtype=np.float32, copy=False)
 
 
 def compact_json(data: dict[str, Any]) -> str:
