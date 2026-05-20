@@ -34,6 +34,9 @@ PY
 
 VDJDB_COUNT="$(count_rows "$VDJDB_MANIFEST")"
 YFV_COUNT="$(count_rows "$YFV_MANIFEST")"
+echo "Dispatch working directory: $(pwd)"
+echo "VDJdb manifest: ${VDJDB_MANIFEST} rows=${VDJDB_COUNT}"
+echo "YFV manifest: ${YFV_MANIFEST} rows=${YFV_COUNT}"
 
 if [[ "$VDJDB_COUNT" -lt 1 ]]; then
   echo "VDJdb manifest is empty: $VDJDB_MANIFEST" >&2
@@ -45,12 +48,16 @@ if [[ "$YFV_COUNT" -lt 1 ]]; then
   exit 1
 fi
 
+echo "Submitting VDJdb array: --array=1-${VDJDB_COUNT} benchmark/slurm/run_03_array_vdjdb.sbatch"
 job_vdjdb="$(sbatch --parsable --array=1-${VDJDB_COUNT} benchmark/slurm/run_03_array_vdjdb.sbatch)"
+echo "Submitting YFV array: --array=1-${YFV_COUNT} benchmark/slurm/run_03_array_yfv.sbatch"
 job_yfv="$(sbatch --parsable --array=1-${YFV_COUNT} benchmark/slurm/run_03_array_yfv.sbatch)"
 # Consolidate should still run if a few array tasks fail; failed runs are recorded in
 # per-run metadata and downstream evaluation filters to successful assignments.
+echo "Submitting metadata consolidation after arrays finish: ${job_vdjdb}:${job_yfv}"
 job03_consolidate="$(sbatch --parsable --dependency=afterany:${job_vdjdb}:${job_yfv} benchmark/slurm/run_03_consolidate_metadata.sbatch)"
 
+echo "Submitting downstream evaluation jobs"
 job04="$(sbatch --parsable --dependency=afterok:${job03_consolidate} benchmark/slurm/run_04_evaluate_vdjdb.sbatch)"
 job05="$(sbatch --parsable --dependency=afterok:${job03_consolidate} benchmark/slurm/run_05_evaluate_yfv_enrichment.sbatch)"
 job06="$(sbatch --parsable --dependency=afterok:${job05} benchmark/slurm/run_06_evaluate_yfv_known_clonotypes.sbatch)"
