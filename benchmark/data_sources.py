@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -9,7 +10,7 @@ DEFAULT_VDJDB_MOTIFS_DIR = SIBLING_PROJECTS_ROOT / "vdjdb-motifs"
 DEFAULT_YFV_RUNS_DIR = Path("/projects/immunestatus/pogorelyy/redcea/runs")
 DEFAULT_YFV_AIRR_DIR = Path("/projects/immunestatus/pogorelyy/airr_format")
 DEFAULT_VDJDB_EMBED_DIR = Path("/projects/immunestatus/vdjdb_validation/tcremp")
-DEFAULT_TCRVDB_PATH = DEFAULT_VDJDB_MOTIFS_DIR / "notebooks" / "01_05_2025_TCRvdb.csv"
+DEFAULT_TCRVDB_PATH = Path.home() / "01_05_2025_TCRvdb.csv"
 DEFAULT_VDJDB_RELEASE_PATH = DEFAULT_VDJDB_MOTIFS_DIR / "vdjdb_release" / "vdjdb.slim.txt"
 DEFAULT_VDJDB_FULL_PATH = DEFAULT_VDJDB_MOTIFS_DIR / "redcea" / "data" / "vdjdb_full.txt"
 DEFAULT_VDJDB_BG_SOURCE_AIRR = DEFAULT_VDJDB_MOTIFS_DIR / "redcea" / "data" / "backgrounds" / "trb_background_100k.tsv"
@@ -70,8 +71,14 @@ def discover_yfv_donor_ids(runs_dir=DEFAULT_YFV_RUNS_DIR):
     if not runs_dir.exists():
         return donor_ids
     for path in sorted(runs_dir.iterdir()):
-        if path.is_dir() and path.name.startswith("yfv_"):
-            donor_ids.append(path.name.replace("yfv_", "", 1))
+        if not path.is_dir() or not path.name.startswith("yfv_"):
+            continue
+        donor_id = path.name.replace("yfv_", "", 1)
+        if not re.fullmatch(r"[A-Z][0-9]+_F[0-9]+", donor_id):
+            continue
+        resolved = resolve_yfv_embedding_paths(donor_id, runs_dir)
+        if resolved["sample_embedding"].exists() and resolved["background_embedding"].exists():
+            donor_ids.append(donor_id)
     return donor_ids
 
 
@@ -98,3 +105,7 @@ def resolve_vdjdb_background_paths(
         "vj_airr": Path(vj_airr),
         "vj_embedding": Path(vj_embedding),
     }
+
+
+def resolve_tcrvdb_path(path=DEFAULT_TCRVDB_PATH):
+    return Path(path).expanduser()

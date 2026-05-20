@@ -28,6 +28,7 @@ from benchmark.data_sources import (
     discover_yfv_donor_ids,
     resolve_vdjdb_background_paths,
     resolve_vdjdb_embedding_path,
+    resolve_tcrvdb_path,
     resolve_yfv_embedding_paths,
 )
 
@@ -102,7 +103,7 @@ def standardize_metadata_frame(frame: pd.DataFrame, *, chain_default: str = "TRB
 
 
 def build_vdjdb_truth_table(tcrvdb_path: str | Path, *, padj_threshold: float = DEFAULT_TCRVDB_PADJ_THRESHOLD) -> pd.DataFrame:
-    truth = pd.read_csv(tcrvdb_path).drop(columns=["Unnamed: 0"], errors="ignore")
+    truth = pd.read_csv(resolve_tcrvdb_path(tcrvdb_path)).drop(columns=["Unnamed: 0"], errors="ignore")
     truth["chain"] = "TRB"
     truth["cdr3"] = truth["cdr3_beta_aa"].fillna("").astype(str)
     truth["v_gene"] = normalize_segment(truth["TRBV"])
@@ -265,7 +266,7 @@ def build_known_yfv_clonotypes(
     *,
     known_epitopes: tuple[str, ...] = DEFAULT_YFV_KNOWN_EPITOPES,
 ) -> pd.DataFrame:
-    truth = pd.read_csv(tcrvdb_path).drop(columns=["Unnamed: 0"], errors="ignore")
+    truth = pd.read_csv(resolve_tcrvdb_path(tcrvdb_path)).drop(columns=["Unnamed: 0"], errors="ignore")
     truth = truth.loc[(truth["data_origin"] == "vdjdb") & truth["epitope_aa"].isin(known_epitopes)].copy()
     truth["cdr3"] = truth["cdr3_beta_aa"].fillna("").astype(str)
     truth["v_gene"] = normalize_segment(truth["TRBV_IMGT"].fillna(truth["TRBV"]))
@@ -311,14 +312,14 @@ def build_source_manifest(
         vj_airr=vdjdb_bg_vj_airr,
         vj_embedding=vdjdb_bg_vj_embedding,
     )
-    for source_type, path in [
-        ("truth_labels", Path(tcrvdb_path)),
-        ("vdjdb_release", Path(vdjdb_release_path)),
-        ("vdjdb_full", Path(vdjdb_full_path)),
-        ("background_source_airr", background_paths["source_airr"]),
-        ("background_source_embedding", background_paths["source_embedding"]),
-        ("background_vj_airr", background_paths["vj_airr"]),
-        ("background_vj_embedding", background_paths["vj_embedding"]),
+    for source_type, path, required in [
+        ("truth_labels", resolve_tcrvdb_path(tcrvdb_path), True),
+        ("vdjdb_release", Path(vdjdb_release_path), True),
+        ("vdjdb_full", Path(vdjdb_full_path), True),
+        ("background_source_airr", background_paths["source_airr"], True),
+        ("background_source_embedding", background_paths["source_embedding"], True),
+        ("background_vj_airr", background_paths["vj_airr"], False),
+        ("background_vj_embedding", background_paths["vj_embedding"], False),
     ]:
         rows.append(
             {
@@ -328,6 +329,7 @@ def build_source_manifest(
                 "source_type": source_type,
                 "path": str(path),
                 "exists": path.exists(),
+                "required": bool(required),
             }
         )
 
@@ -342,6 +344,7 @@ def build_source_manifest(
                     "source_type": "embedding",
                     "path": str(resolved["sample_embedding"]),
                     "exists": resolved["sample_embedding"].exists(),
+                    "required": True,
                 },
                 {
                     "dataset_group": "vdjdb",
@@ -350,6 +353,7 @@ def build_source_manifest(
                     "source_type": "index",
                     "path": str(resolved["sample_index"]),
                     "exists": resolved["sample_index"].exists(),
+                    "required": True,
                 },
             ]
         )
@@ -371,6 +375,7 @@ def build_source_manifest(
                     "source_type": "embedding" if "embedding" in key else "index",
                     "path": str(resolved[key]),
                     "exists": Path(resolved[key]).exists(),
+                    "required": True,
                 }
             )
         subject, replicate = donor_id.split("_", 1)
@@ -385,6 +390,7 @@ def build_source_manifest(
                     "source_type": "airr",
                     "path": str(sample_airr),
                     "exists": sample_airr.exists(),
+                    "required": True,
                 },
                 {
                     "dataset_group": "yfv",
@@ -393,6 +399,7 @@ def build_source_manifest(
                     "source_type": "airr",
                     "path": str(background_airr),
                     "exists": background_airr.exists(),
+                    "required": True,
                 },
             ]
         )
@@ -474,7 +481,9 @@ def main() -> int:
     out_path = Path(args.manifest_out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(out_path, sep="\t", index=False)
-    missing = manifest.loc[~manifest["exists"]].copy()
+    if "required" not in manifest.columns:
+        manifest["required"] = True
+    missing = manifest.loc[manifest["required"] & ~manifest["exists"]].copy()
     if len(missing):
         print("Missing expected source files:")
         print(missing.to_string(index=False))
