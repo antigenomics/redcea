@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -134,6 +135,44 @@ def standardize_metadata_frame(frame: pd.DataFrame, *, chain_default: str = "TRB
     return out
 
 
+def clone_id_candidates(frame: pd.DataFrame, *, sample_label: Optional[str] = None) -> pd.DataFrame:
+    candidates = pd.DataFrame(index=frame.index)
+    raw_ids = None
+    if "clone_id" in frame.columns:
+        raw_ids = frame["clone_id"].astype(str)
+        candidates["clone_id"] = raw_ids
+    elif "clonotype_id" in frame.columns:
+        raw_ids = frame["clonotype_id"].astype(str)
+        candidates["clone_id"] = raw_ids
+
+    one_based = pd.Series(np.arange(1, len(frame) + 1), index=frame.index).astype(str)
+    zero_based = pd.Series(np.arange(len(frame)), index=frame.index).astype(str)
+    candidates["row_1_based"] = one_based
+    candidates["row_0_based"] = zero_based
+    if sample_label is not None:
+        prefix = "s_" if sample_label == "sample" else "b_"
+        candidates[f"{prefix}row_1_based"] = prefix + one_based
+        candidates[f"{prefix}row_0_based"] = prefix + zero_based
+        if raw_ids is not None:
+            candidates[f"{prefix}clone_id"] = prefix + raw_ids.str.replace(r"^[sb]_", "", regex=True)
+    return candidates
+
+
+def best_clone_id_key(left: pd.DataFrame, right: pd.DataFrame) -> tuple[Optional[tuple[str, str]], int]:
+    best_column = None
+    best_overlap = 0
+    for left_column in left.columns:
+        left_values = set(left[left_column].dropna().astype(str))
+        if not left_values:
+            continue
+        for right_column in right.columns:
+            overlap = len(left_values & set(right[right_column].dropna().astype(str)))
+            if overlap > best_overlap:
+                best_column = (left_column, right_column)
+                best_overlap = overlap
+    return best_column, best_overlap
+
+
 def build_vdjdb_truth_table(tcrvdb_path: str | Path, *, padj_threshold: float = DEFAULT_TCRVDB_PADJ_THRESHOLD) -> pd.DataFrame:
     truth = pd.read_csv(resolve_tcrvdb_path(tcrvdb_path)).drop(columns=["Unnamed: 0"], errors="ignore")
     truth["chain"] = "TRB"
@@ -214,18 +253,44 @@ def align_yfv_embedding_with_airr(
     embedding_frame = pd.read_parquet(embedding_path)
     metadata_from_embedding, embedding_array = split_embedding_metadata(embedding_frame)
     airr_frame = read_airr_like_table(airr_path).reset_index(drop=True)
-    if len(airr_frame) != len(embedding_frame):
+    standardized_airr = standardize_metadata_frame(airr_frame, chain_default="TRB")
+    standardized_embedding = standardize_metadata_frame(metadata_from_embedding, chain_default="TRB")
+    airr_candidates = clone_id_candidates(airr_frame, sample_label=sample_label)
+    embedding_candidates = clone_id_candidates(metadata_from_embedding, sample_label=sample_label)
+    match_columns, overlap = best_clone_id_key(embedding_candidates, airr_candidates)
+    if match_columns is not None and overlap == len(metadata_from_embedding):
+        embedding_key, airr_key = match_columns
+        airr_with_key = standardized_airr.copy()
+        airr_with_key["_merge_clone_id"] = airr_candidates[airr_key].astype(str)
+        embedding_order = pd.DataFrame(
+            {
+                "_merge_clone_id": embedding_candidates[embedding_key].astype(str),
+                "_embedding_order": np.arange(len(metadata_from_embedding), dtype=np.int64),
+            }
+        )
+        merged = embedding_order.merge(airr_with_key, on="_merge_clone_id", how="left", sort=False)
+        if merged[["cdr3", "v_gene", "j_gene"]].isna().any(axis=None):
+            raise ValueError(
+                "Failed to align AIRR metadata by clone_id for donor {0} {1}: matched={2}, embedding_rows={3}.".format(
+                    donor_id,
+                    sample_label,
+                    overlap,
+                    len(metadata_from_embedding),
+                )
+            )
+        merged = merged.sort_values("_embedding_order").drop(columns=["_merge_clone_id", "_embedding_order"]).reset_index(drop=True)
+    elif len(airr_frame) == len(embedding_frame):
+        merged = standardized_airr.copy()
+    else:
         raise ValueError(
-            "Row count mismatch for donor {0} {1}: embedding rows={2}, AIRR rows={3}".format(
+            "Cannot align AIRR metadata for donor {0} {1}: embedding rows={2}, AIRR rows={3}, best clone_id overlap={4}.".format(
                 donor_id,
                 sample_label,
                 len(embedding_frame),
                 len(airr_frame),
+                overlap,
             )
         )
-    standardized_airr = standardize_metadata_frame(airr_frame, chain_default="TRB")
-    standardized_embedding = standardize_metadata_frame(metadata_from_embedding, chain_default="TRB")
-    merged = standardized_airr.copy()
     for column in ["cdr3", "v_gene", "j_gene", "chain"]:
         empty_mask = merged[column].fillna("").astype(str).eq("")
         merged.loc[empty_mask, column] = standardized_embedding.loc[empty_mask, column]
