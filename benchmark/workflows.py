@@ -25,6 +25,14 @@ from benchmark.plotting import (
 )
 from benchmark.run_benchmark import consolidate_run_metadata
 from benchmark.runner import extract_embeddings
+from benchmark.data_sources import REPO_ROOT
+
+
+def repo_path(path: str | Path) -> Path:
+    path = Path(path)
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
 
 
 def ensure_output_dirs() -> None:
@@ -37,7 +45,7 @@ def ensure_output_dirs() -> None:
         Path("figures/clustering_strategy"),
         Path("reports"),
     ]:
-        path.mkdir(parents=True, exist_ok=True)
+        repo_path(path).mkdir(parents=True, exist_ok=True)
 
 
 def load_assignment_tables(
@@ -49,8 +57,8 @@ def load_assignment_tables(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     ensure_output_dirs()
     run_metadata = consolidate_run_metadata(
-        metadata_parts_dir=metadata_parts_dir,
-        metadata_path=metadata_path,
+        metadata_parts_dir=repo_path(metadata_parts_dir),
+        metadata_path=repo_path(metadata_path),
     )
     successful_run_ids: set[str]
     if only_success and len(run_metadata):
@@ -58,7 +66,7 @@ def load_assignment_tables(
     else:
         successful_run_ids = set(run_metadata["run_id"].astype(str)) if len(run_metadata) else set()
     frames = []
-    for path in sorted(Path(assignments_dir).glob("*.parquet")):
+    for path in sorted(repo_path(assignments_dir).glob("*.parquet")):
         if only_success and successful_run_ids and path.stem not in successful_run_ids:
             continue
         frames.append(pd.read_parquet(path))
@@ -71,7 +79,7 @@ def compute_density_by_length(
     *,
     k: int = 5,
 ) -> pd.DataFrame:
-    processed_dir = Path(processed_dir)
+    processed_dir = repo_path(processed_dir)
     datasets = {
         "VDJdb / GLC": pd.read_parquet(processed_dir / "vdjdb_glc.parquet"),
         "VDJdb / YLQ": pd.read_parquet(processed_dir / "vdjdb_ylq.parquet"),
@@ -125,9 +133,11 @@ def run_density_analysis(
 ) -> pd.DataFrame:
     ensure_output_dirs()
     density_df = compute_density_by_length(processed_dir, k=k)
+    density_path = repo_path(density_path)
+    density_path.parent.mkdir(parents=True, exist_ok=True)
     density_df.to_csv(density_path, sep="\t", index=False)
     if len(density_df):
-        plot_density_by_length(density_df, figure_stem)
+        plot_density_by_length(density_df, repo_path(figure_stem))
     return density_df
 
 
@@ -148,14 +158,18 @@ def run_vdjdb_evaluation(
     )
     if assignments.empty or "dataset_mode" not in assignments.columns:
         metrics_df = pd.DataFrame()
+        metrics_path = repo_path(metrics_path)
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
         metrics_df.to_csv(metrics_path, sep="\t", index=False)
         return metrics_df
     vdjdb_assignments = assignments.loc[assignments["dataset_mode"] == "vdjdb"].copy()
     metrics_df = compute_vdjdb_metrics(vdjdb_assignments, run_metadata)
+    metrics_path = repo_path(metrics_path)
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_df.to_csv(metrics_path, sep="\t", index=False)
     if len(metrics_df):
-        plot_vdjdb_benchmark(metrics_df, fig2_stem)
-        plot_vdjdb_signal_concentration(metrics_df, fig3_stem)
+        plot_vdjdb_benchmark(metrics_df, repo_path(fig2_stem))
+        plot_vdjdb_signal_concentration(metrics_df, repo_path(fig3_stem))
     return metrics_df
 
 
@@ -177,16 +191,24 @@ def run_yfv_enrichment_evaluation(
     if assignments.empty or "dataset_mode" not in assignments.columns:
         enrichment_df = pd.DataFrame()
         summary_df = pd.DataFrame()
+        enrichment_path = repo_path(enrichment_path)
+        metrics_path = repo_path(metrics_path)
+        enrichment_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
         enrichment_df.to_csv(enrichment_path, sep="\t", index=False)
         summary_df.to_csv(metrics_path, sep="\t", index=False)
         return enrichment_df, summary_df
     yfv_assignments = assignments.loc[assignments["dataset_mode"] == "yfv"].copy()
     enrichment_df = compute_yfv_cluster_enrichment(yfv_assignments)
+    enrichment_path = repo_path(enrichment_path)
+    enrichment_path.parent.mkdir(parents=True, exist_ok=True)
     enrichment_df.to_csv(enrichment_path, sep="\t", index=False)
     summary_df = summarize_yfv_enrichment(enrichment_df)
+    metrics_path = repo_path(metrics_path)
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
     summary_df.to_csv(metrics_path, sep="\t", index=False)
     if len(summary_df):
-        plot_yfv_enrichment_summary(summary_df, fig4_stem)
+        plot_yfv_enrichment_summary(summary_df, repo_path(fig4_stem))
     return enrichment_df, summary_df
 
 
@@ -208,10 +230,12 @@ def run_yfv_known_clonotype_evaluation(
     )
     if assignments.empty or "dataset_mode" not in assignments.columns:
         recovery_df = pd.DataFrame()
+        output_path = repo_path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         recovery_df.to_csv(output_path, sep="\t", index=False)
         return recovery_df
-    enrichment_df = pd.read_csv(enrichment_path, sep="\t")
-    known_yfv = pd.read_csv(known_yfv_path, sep="\t")
+    enrichment_df = pd.read_csv(repo_path(enrichment_path), sep="\t")
+    known_yfv = pd.read_csv(repo_path(known_yfv_path), sep="\t")
     yfv_assignments = assignments.loc[assignments["dataset_mode"] == "yfv"].copy()
     recovery_df = compute_known_yfv_recovery(yfv_assignments, enrichment_df, known_yfv)
     if len(recovery_df):
@@ -225,9 +249,11 @@ def run_yfv_known_clonotype_evaluation(
     else:
         recovery_df["candidate_level_recovery_rate"] = []
         recovery_df["enrichment_level_recovery_rate"] = []
+    output_path = repo_path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     recovery_df.to_csv(output_path, sep="\t", index=False)
     if len(recovery_df):
-        plot_yfv_known_recovery_heatmap(recovery_df, fig5_stem)
+        plot_yfv_known_recovery_heatmap(recovery_df, repo_path(fig5_stem))
     return recovery_df
 
 
@@ -248,14 +274,18 @@ def run_cross_donor_overlap_evaluation(
     )
     if assignments.empty or "dataset_mode" not in assignments.columns:
         overlap_df = pd.DataFrame()
+        output_path = repo_path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         overlap_df.to_csv(output_path, sep="\t", index=False)
         return overlap_df
-    enrichment_df = pd.read_csv(enrichment_path, sep="\t")
+    enrichment_df = pd.read_csv(repo_path(enrichment_path), sep="\t")
     yfv_assignments = assignments.loc[assignments["dataset_mode"] == "yfv"].copy()
     overlap_df = compute_cross_donor_overlap(yfv_assignments, enrichment_df)
+    output_path = repo_path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     overlap_df.to_csv(output_path, sep="\t", index=False)
     if len(overlap_df):
-        plot_cross_donor_overlap(overlap_df, fig6_stem)
+        plot_cross_donor_overlap(overlap_df, repo_path(fig6_stem))
     return overlap_df
 
 
@@ -267,7 +297,7 @@ def build_final_method_comparison(
     overlap_path: str | Path = "results/metrics/yfv_cross_donor_overlap.tsv",
 ) -> pd.DataFrame:
     def _safe_read(path: str | Path) -> pd.DataFrame:
-        path = Path(path)
+        path = repo_path(path)
         if not path.exists() or path.stat().st_size == 0:
             return pd.DataFrame()
         return pd.read_csv(path, sep="\t")
@@ -376,7 +406,7 @@ def write_summary_report(
     *,
     output_path: str | Path = "reports/clustering_strategy_summary.md",
 ) -> Path:
-    output_path = Path(output_path)
+    output_path = repo_path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# Clustering Strategy Summary",
@@ -424,8 +454,10 @@ def run_summary_and_method_selection(
         yfv_recovery_path=yfv_recovery_path,
         overlap_path=overlap_path,
     )
+    output_table_path = repo_path(output_table_path)
+    output_table_path.parent.mkdir(parents=True, exist_ok=True)
     comparison_df.to_csv(output_table_path, sep="\t", index=False)
     if len(comparison_df):
-        plot_final_method_summary(comparison_df, figure_stem)
+        plot_final_method_summary(comparison_df, repo_path(figure_stem))
     write_summary_report(comparison_df, output_path=report_path)
     return comparison_df
