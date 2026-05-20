@@ -3,6 +3,12 @@ from __future__ import annotations
 from itertools import product
 
 
+MIN_SAMPLES_GRID = [3, 4, 5, 8, 10]
+K_GRID = [3, 4, 5, 10, 20]
+LEIDEN_RESOLUTION_GRID = [0.1, 0.5, 1.0, 2.0]
+HYBRID_RESOLUTION_GRID = [0.5, 1.0]
+
+
 PRIORITY_METHODS = [
     "dbscan",
     "vdbscan_length",
@@ -29,33 +35,18 @@ def get_method_grid(method, include_extended=False):
     if method == "dbscan":
         return list(
             _product_dict(
-                min_samples=[3, 5, 10],
+                min_samples=MIN_SAMPLES_GRID,
                 epsilon_strategy=["knee"],
                 percentile=[None],
-                distance_metric=["euclidean"],
-            )
-        ) + list(
-            _product_dict(
-                min_samples=[3, 5, 10],
-                epsilon_strategy=["percentile"],
-                percentile=[5, 10, 20],
                 distance_metric=["euclidean"],
             )
         )
     if method == "vdbscan_length":
         return list(
             _product_dict(
-                min_samples=[3, 5, 10],
+                min_samples=MIN_SAMPLES_GRID,
                 epsilon_strategy=["knee"],
                 percentile=[None],
-                min_group_size=[100],
-                distance_metric=["euclidean"],
-            )
-        ) + list(
-            _product_dict(
-                min_samples=[3, 5, 10],
-                epsilon_strategy=["percentile"],
-                percentile=[5, 10, 20],
                 min_group_size=[100],
                 distance_metric=["euclidean"],
             )
@@ -63,26 +54,26 @@ def get_method_grid(method, include_extended=False):
     if method == "leiden":
         return list(
             _product_dict(
-                k=[10, 20, 50],
-                resolution=[0.1, 0.5, 1.0, 2.0],
+                k=K_GRID,
+                resolution=LEIDEN_RESOLUTION_GRID,
                 distance_metric=["euclidean"],
             )
         )
     if method == "leiden_min_size":
         return list(
             _product_dict(
-                k=[10, 20, 50],
-                resolution=[0.1, 0.5, 1.0, 2.0],
-                min_cluster_size=[3, 5, 10],
+                k=K_GRID,
+                resolution=LEIDEN_RESOLUTION_GRID,
+                min_cluster_size=MIN_SAMPLES_GRID,
                 distance_metric=["euclidean"],
             )
         )
     if method == "leiden_vdbscan":
         return list(
             _product_dict(
-                leiden_k=[20],
-                leiden_resolution=[0.5, 1.0],
-                vdbscan_min_samples=[5],
+                leiden_k=K_GRID,
+                leiden_resolution=HYBRID_RESOLUTION_GRID,
+                vdbscan_min_samples=MIN_SAMPLES_GRID,
                 epsilon_strategy=["knee"],
                 percentile=[None],
                 min_group_size=[100],
@@ -92,21 +83,21 @@ def get_method_grid(method, include_extended=False):
     if method == "vdbscan_leiden":
         return list(
             _product_dict(
-                vdbscan_min_samples=[5],
+                vdbscan_min_samples=MIN_SAMPLES_GRID,
                 epsilon_strategy=["knee"],
                 percentile=[None],
                 min_group_size=[100],
-                leiden_k=[20],
-                leiden_resolution=[0.5, 1.0],
+                leiden_k=K_GRID,
+                leiden_resolution=HYBRID_RESOLUTION_GRID,
                 distance_metric=["euclidean"],
             )
         )
     if method == "leiden_dbscan":
         return list(
             _product_dict(
-                leiden_k=[20],
-                leiden_resolution=[0.5, 1.0],
-                dbscan_min_samples=[5],
+                leiden_k=K_GRID,
+                leiden_resolution=HYBRID_RESOLUTION_GRID,
+                dbscan_min_samples=MIN_SAMPLES_GRID,
                 epsilon_strategy=["knee"],
                 percentile=[None],
                 distance_metric=["euclidean"],
@@ -115,11 +106,11 @@ def get_method_grid(method, include_extended=False):
     if method == "dbscan_leiden":
         return list(
             _product_dict(
-                dbscan_min_samples=[5],
+                dbscan_min_samples=MIN_SAMPLES_GRID,
                 epsilon_strategy=["knee"],
                 percentile=[None],
-                leiden_k=[20],
-                leiden_resolution=[0.5, 1.0],
+                leiden_k=K_GRID,
+                leiden_resolution=HYBRID_RESOLUTION_GRID,
                 distance_metric=["euclidean"],
             )
         )
@@ -131,4 +122,3 @@ def get_enabled_methods(include_extended=False):
     if include_extended:
         methods.extend(EXTENDED_METHODS)
     return methods
-
