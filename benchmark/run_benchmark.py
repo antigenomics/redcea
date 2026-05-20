@@ -83,6 +83,19 @@ def _load_vdjdb_processed_inputs(processed_dir):
     return glc, ylq
 
 
+def _validate_vdjdb_processed_inputs(processed_dir):
+    processed_dir = Path(processed_dir)
+    required = [
+        processed_dir / "vdjdb_glc.parquet",
+        processed_dir / "vdjdb_ylq.parquet",
+    ]
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Processed benchmark inputs are missing. Expected files: {0}".format(", ".join(missing))
+        )
+
+
 def _load_yfv_manifest(processed_dir):
     manifest_path = Path(processed_dir) / "yfv_repertoires_manifest.tsv"
     if not manifest_path.exists():
@@ -91,19 +104,18 @@ def _load_yfv_manifest(processed_dir):
 
 
 def build_execution_manifest(processed_dir, include_extended=False):
-    glc, ylq = _load_vdjdb_processed_inputs(processed_dir)
+    _validate_vdjdb_processed_inputs(processed_dir)
     yfv_manifest = _load_yfv_manifest(processed_dir)
     grid_manifest = build_grid_manifest(include_extended=include_extended)
     rows = []
 
     vdjdb_datasets = [
-        ("vdjdb_glc", "GLC", glc),
-        ("vdjdb_ylq", "YLQ", ylq),
+        ("vdjdb_glc", "GLC"),
+        ("vdjdb_ylq", "YLQ"),
     ]
     for _, row in grid_manifest.iterrows():
         method = row["method"]
-        for dataset_name, epitope, frame in vdjdb_datasets:
-            del frame
+        for dataset_name, epitope in vdjdb_datasets:
             rows.append(
                 {
                     "grid_id": row["grid_id"],
@@ -252,21 +264,28 @@ def main():
     manifest_path = Path(args.manifest_path)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     grid_manifest.to_csv(manifest_path, sep="\t", index=False)
+    print("Wrote grid manifest: {0} ({1} parameter rows)".format(manifest_path, len(grid_manifest)), flush=True)
 
     execution_manifest = build_execution_manifest(args.processed_dir, include_extended=args.include_extended)
     execution_path = Path(args.execution_path)
     execution_path.parent.mkdir(parents=True, exist_ok=True)
     execution_manifest.to_csv(execution_path, sep="\t", index=False)
-    execution_manifest.loc[execution_manifest["dataset_mode"] == "vdjdb"].to_csv(
+    vdjdb_manifest = execution_manifest.loc[execution_manifest["dataset_mode"] == "vdjdb"]
+    yfv_manifest = execution_manifest.loc[execution_manifest["dataset_mode"] == "yfv"]
+    vdjdb_manifest.to_csv(
         Path(args.vdjdb_manifest_path),
         sep="\t",
         index=False,
     )
-    execution_manifest.loc[execution_manifest["dataset_mode"] == "yfv"].to_csv(
+    yfv_manifest.to_csv(
         Path(args.yfv_manifest_path),
         sep="\t",
         index=False,
     )
+    print("Wrote execution manifest: {0} ({1} total rows)".format(execution_path, len(execution_manifest)), flush=True)
+    print("Wrote VDJdb manifest: {0} ({1} array tasks)".format(args.vdjdb_manifest_path, len(vdjdb_manifest)), flush=True)
+    print("Wrote YFV manifest: {0} ({1} array tasks)".format(args.yfv_manifest_path, len(yfv_manifest)), flush=True)
+    print("Methods: {0}".format(", ".join(grid_manifest["method"].drop_duplicates().astype(str).tolist())), flush=True)
 
     if args.mode == "manifest":
         return 0

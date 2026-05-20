@@ -47,16 +47,15 @@ fi
 
 job_vdjdb="$(sbatch --parsable --array=1-${VDJDB_COUNT} benchmark/slurm/run_03_array_vdjdb.sbatch)"
 job_yfv="$(sbatch --parsable --array=1-${YFV_COUNT} benchmark/slurm/run_03_array_yfv.sbatch)"
-job03_consolidate="$(sbatch --parsable --dependency=afterok:${job_vdjdb}:${job_yfv} benchmark/slurm/run_03_consolidate_metadata.sbatch)"
+# Consolidate should still run if a few array tasks fail; failed runs are recorded in
+# per-run metadata and downstream evaluation filters to successful assignments.
+job03_consolidate="$(sbatch --parsable --dependency=afterany:${job_vdjdb}:${job_yfv} benchmark/slurm/run_03_consolidate_metadata.sbatch)"
 
 job04="$(sbatch --parsable --dependency=afterok:${job03_consolidate} benchmark/slurm/run_04_evaluate_vdjdb.sbatch)"
 job05="$(sbatch --parsable --dependency=afterok:${job03_consolidate} benchmark/slurm/run_05_evaluate_yfv_enrichment.sbatch)"
 job06="$(sbatch --parsable --dependency=afterok:${job05} benchmark/slurm/run_06_evaluate_yfv_known_clonotypes.sbatch)"
 job07="$(sbatch --parsable --dependency=afterok:${job05} benchmark/slurm/run_07_evaluate_yfv_cross_donor_overlap.sbatch)"
 summary_deps="${job04}:${job06}:${job07}"
-if [[ -n "${DENSITY_JOB_ID:-}" ]]; then
-  summary_deps="${DENSITY_JOB_ID}:${summary_deps}"
-fi
 job08="$(sbatch --parsable --dependency=afterok:${summary_deps} benchmark/slurm/run_08_summary_and_method_selection.sbatch)"
 
 echo "Submitted array jobs:"
@@ -69,3 +68,6 @@ echo "  05_evaluate_yfv_enrichment: $job05"
 echo "  06_evaluate_yfv_known_clonotypes: $job06"
 echo "  07_evaluate_yfv_cross_donor_overlap: $job07"
 echo "  08_summary_and_method_selection: $job08"
+if [[ -n "${DENSITY_JOB_ID:-}" ]]; then
+  echo "  02_density_by_length runs independently and does not block summary: ${DENSITY_JOB_ID}"
+fi
