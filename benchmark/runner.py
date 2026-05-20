@@ -87,12 +87,19 @@ def _cdr3_lengths(frame: pd.DataFrame) -> np.ndarray:
 def _estimate_eps(distances: np.ndarray, min_samples: int, strategy: str, percentile: float | None) -> float:
     kth = distances[:, min(min_samples - 1, distances.shape[1] - 1)]
     if strategy == "knee":
-        return float(estimate_dbscan_eps(data=None, distances=kth, n_neighbors=min_samples))
-    if strategy == "percentile":
+        eps = float(estimate_dbscan_eps(data=None, distances=kth, n_neighbors=min_samples))
+    elif strategy == "percentile":
         if percentile is None:
             raise ValueError("percentile must be provided for percentile epsilon strategy")
-        return float(np.percentile(kth, percentile))
-    raise ValueError(f"Unknown epsilon strategy: {strategy}")
+        eps = float(np.percentile(kth, percentile))
+    else:
+        raise ValueError(f"Unknown epsilon strategy: {strategy}")
+    if np.isfinite(eps) and eps > 0:
+        return eps
+    positive = kth[np.isfinite(kth) & (kth > 0)]
+    if len(positive):
+        return float(np.min(positive))
+    return float(np.finfo(np.float32).eps)
 
 
 def _run_dbscan_existing(
