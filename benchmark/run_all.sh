@@ -1,7 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(pwd)"
+if [[ ! -d "$ROOT_DIR/benchmark" ]]; then
+  echo "Run benchmark/run_all.sh from the repository root." >&2
+  exit 1
+fi
 cd "$ROOT_DIR"
 
 MODE="${1:-slurm}"

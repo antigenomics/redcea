@@ -1,7 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(pwd)"
+if [[ ! -d "$ROOT_DIR/benchmark/slurm" ]]; then
+  echo "Run benchmark/launch_all_slurm.sh from the repository root." >&2
+  exit 1
+fi
 SLURM_DIR="$ROOT_DIR/benchmark/slurm"
 
 submit_job() {

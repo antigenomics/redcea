@@ -6,8 +6,12 @@
 #SBATCH --output=benchmark/slurm/logs/%x.%j.out
 
 set -euo pipefail
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$ROOT_DIR"
+if [[ ! -f benchmark/slurm/run_03_array_vdjdb.sbatch ]]; then
+  echo "Expected to run from repository root; benchmark/slurm scripts were not found." >&2
+  exit 1
+fi
 
 if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
