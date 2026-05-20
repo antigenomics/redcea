@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import traceback
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -406,6 +407,7 @@ class ClusteringBenchmarkRunner:
         parameter_json = compact_json(parameters)
         run_id = run_id or "{0}_{1}_{2}".format(dataset_mode, method, uuid.uuid4().hex[:10])
         started = time.perf_counter()
+        error_traceback = ""
         try:
             embeddings = extract_embeddings(dataset_df)
             embeddings = prepare_data_for_clustering(pd.DataFrame(embeddings), n_components=min(self.pca_components, embeddings.shape[1]))
@@ -414,6 +416,7 @@ class ClusteringBenchmarkRunner:
             status = "success"
             error_message = ""
         except Exception as exc:
+            error_traceback = traceback.format_exc()
             assignments = standardized_assignment_table(
                 dataset_df.copy().assign(cluster_id=-1, is_noise=True),
                 dataset,
@@ -424,7 +427,7 @@ class ClusteringBenchmarkRunner:
                 donor_id,
             )
             status = "error"
-            error_message = str(exc)
+            error_message = "{0}: {1}".format(type(exc).__name__, str(exc))
         runtime_seconds = time.perf_counter() - started
         n_noise = int(assignments["is_noise"].sum())
         n_clusters = int(assignments.loc[~assignments["is_noise"], "cluster_id"].nunique())
@@ -440,6 +443,7 @@ class ClusteringBenchmarkRunner:
             "runtime_seconds": float(runtime_seconds),
             "status": status,
             "error_message": error_message,
+            "error_traceback": error_traceback,
         }
         self._save(run_id, assignments, metadata)
         return ClusteringRunResult(run_id=run_id, assignments=assignments, metadata=metadata)

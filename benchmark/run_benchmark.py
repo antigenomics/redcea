@@ -37,6 +37,7 @@ def consolidate_run_metadata(
                 "runtime_seconds",
                 "status",
                 "error_message",
+                "error_traceback",
             ]
         )
     frames = [pd.read_csv(path, sep="\t") for path in part_files]
@@ -221,6 +222,11 @@ def execute_single_manifest_row(manifest_row, processed_dir, runner):
         ),
         flush=True,
     )
+    if result.metadata.get("status") != "success":
+        print("ERROR run_id={0}: {1}".format(result.run_id, result.metadata.get("error_message", "")), flush=True)
+        traceback_text = str(result.metadata.get("error_traceback", "") or "").strip()
+        if traceback_text:
+            print("TRACEBACK run_id={0}:\n{1}".format(result.run_id, traceback_text), flush=True)
     return result
 
 
