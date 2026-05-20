@@ -12,6 +12,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from benchmark.grids import get_enabled_methods, get_method_grid
+from benchmark.prepare_datasets import align_yfv_embedding_with_airr
 from benchmark.runner import ClusteringBenchmarkRunner
 
 
@@ -66,12 +67,11 @@ def build_grid_manifest(include_extended=False):
     return manifest
 
 
-def _load_processed_inputs(processed_dir):
+def _load_vdjdb_processed_inputs(processed_dir):
     processed_dir = Path(processed_dir)
     required = [
         processed_dir / "vdjdb_glc.parquet",
         processed_dir / "vdjdb_ylq.parquet",
-        processed_dir / "yfv_repertoires.parquet",
     ]
     missing = [str(path) for path in required if not path.exists()]
     if missing:
@@ -80,12 +80,19 @@ def _load_processed_inputs(processed_dir):
         )
     glc = pd.read_parquet(processed_dir / "vdjdb_glc.parquet")
     ylq = pd.read_parquet(processed_dir / "vdjdb_ylq.parquet")
-    yfv = pd.read_parquet(processed_dir / "yfv_repertoires.parquet")
-    return glc, ylq, yfv
+    return glc, ylq
+
+
+def _load_yfv_manifest(processed_dir):
+    manifest_path = Path(processed_dir) / "yfv_repertoires_manifest.tsv"
+    if not manifest_path.exists():
+        raise FileNotFoundError("Processed YFV manifest is missing: {0}".format(manifest_path))
+    return pd.read_csv(manifest_path, sep="\t")
 
 
 def build_execution_manifest(processed_dir, include_extended=False):
-    glc, ylq, yfv = _load_processed_inputs(processed_dir)
+    glc, ylq = _load_vdjdb_processed_inputs(processed_dir)
+    yfv_manifest = _load_yfv_manifest(processed_dir)
     grid_manifest = build_grid_manifest(include_extended=include_extended)
     rows = []
 
@@ -111,8 +118,7 @@ def build_execution_manifest(processed_dir, include_extended=False):
                 }
             )
 
-        for donor_id, donor_frame in yfv.groupby("donor_id"):
-            del donor_frame
+        for donor_id in yfv_manifest["donor_id"].astype(str).tolist():
             rows.append(
                 {
                     "grid_id": row["grid_id"],
@@ -130,8 +136,8 @@ def build_execution_manifest(processed_dir, include_extended=False):
 
 
 def _load_dataset_frame(processed_dir, dataset_mode, dataset, donor_id=None):
-    glc, ylq, yfv = _load_processed_inputs(processed_dir)
     if dataset_mode == "vdjdb":
+        glc, ylq = _load_vdjdb_processed_inputs(processed_dir)
         if dataset == "vdjdb_glc":
             return glc
         if dataset == "vdjdb_ylq":
@@ -140,7 +146,24 @@ def _load_dataset_frame(processed_dir, dataset_mode, dataset, donor_id=None):
     if dataset_mode == "yfv":
         if donor_id is None:
             raise ValueError("donor_id is required for yfv execution rows")
-        return yfv.loc[yfv["donor_id"].astype(str) == str(donor_id)].reset_index(drop=True)
+        yfv_manifest = _load_yfv_manifest(processed_dir)
+        matched = yfv_manifest.loc[yfv_manifest["donor_id"].astype(str) == str(donor_id)]
+        if matched.empty:
+            raise KeyError("Unknown yfv donor_id in manifest: {0}".format(donor_id))
+        row = matched.iloc[0]
+        sample = align_yfv_embedding_with_airr(
+            str(donor_id),
+            sample_label="sample",
+            embedding_path=Path(row["sample_embedding_path"]),
+            airr_path=Path(row["sample_airr_path"]),
+        )
+        background = align_yfv_embedding_with_airr(
+            str(donor_id),
+            sample_label="background",
+            embedding_path=Path(row["background_embedding_path"]),
+            airr_path=Path(row["background_airr_path"]),
+        )
+        return pd.concat([sample, background], ignore_index=True)
     raise KeyError("Unknown dataset_mode: {0}".format(dataset_mode))
 
 

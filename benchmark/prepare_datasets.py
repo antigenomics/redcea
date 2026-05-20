@@ -325,37 +325,25 @@ def align_yfv_embedding_with_airr(
     ].copy()
 
 
-def assemble_yfv_processed_dataset(
+def build_yfv_processed_manifest(
     *,
     yfv_runs_dir: str | Path = DEFAULT_YFV_RUNS_DIR,
     yfv_airr_dir: str | Path = DEFAULT_YFV_AIRR_DIR,
 ) -> pd.DataFrame:
-    rows: list[pd.DataFrame] = []
-    donor_ids = discover_yfv_donor_ids(yfv_runs_dir)
-    for donor_id in donor_ids:
+    rows = []
+    for donor_id in discover_yfv_donor_ids(yfv_runs_dir):
         resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
         subject, replicate = donor_id.split("_", 1)
-        sample_airr = Path(yfv_airr_dir) / f"{subject}_15_{replicate}.txt"
-        background_airr = Path(yfv_airr_dir) / f"{subject}_0_{replicate}_with_1.txt"
         rows.append(
-            align_yfv_embedding_with_airr(
-                donor_id,
-                sample_label="sample",
-                embedding_path=resolved["sample_embedding"],
-                airr_path=sample_airr,
-            )
+            {
+                "donor_id": donor_id,
+                "sample_embedding_path": str(resolved["sample_embedding"]),
+                "background_embedding_path": str(resolved["background_embedding"]),
+                "sample_airr_path": str(Path(yfv_airr_dir) / f"{subject}_15_{replicate}.txt"),
+                "background_airr_path": str(Path(yfv_airr_dir) / f"{subject}_0_{replicate}_with_1.txt"),
+            }
         )
-        rows.append(
-            align_yfv_embedding_with_airr(
-                donor_id,
-                sample_label="background",
-                embedding_path=resolved["background_embedding"],
-                airr_path=background_airr,
-            )
-        )
-    if not rows:
-        return pd.DataFrame()
-    return pd.concat(rows, ignore_index=True)
+    return pd.DataFrame(rows)
 
 
 def build_known_yfv_clonotypes(
@@ -526,18 +514,18 @@ def write_processed_datasets(
         tcrvdb_path=tcrvdb_path,
         padj_threshold=padj_threshold,
     )
-    yfv = assemble_yfv_processed_dataset(yfv_runs_dir=yfv_runs_dir, yfv_airr_dir=yfv_airr_dir)
+    yfv_manifest = build_yfv_processed_manifest(yfv_runs_dir=yfv_runs_dir, yfv_airr_dir=yfv_airr_dir)
     known_yfv = build_known_yfv_clonotypes(tcrvdb_path)
 
     output_paths = {
         "vdjdb_glc": processed_dir / "vdjdb_glc.parquet",
         "vdjdb_ylq": processed_dir / "vdjdb_ylq.parquet",
-        "yfv_repertoires": processed_dir / "yfv_repertoires.parquet",
+        "yfv_manifest": processed_dir / "yfv_repertoires_manifest.tsv",
         "known_yfv": processed_dir / "known_yfv_vdjdb_clonotypes.tsv",
     }
     glc.to_parquet(output_paths["vdjdb_glc"], index=False)
     ylq.to_parquet(output_paths["vdjdb_ylq"], index=False)
-    yfv.to_parquet(output_paths["yfv_repertoires"], index=False)
+    yfv_manifest.to_csv(output_paths["yfv_manifest"], sep="\t", index=False)
     known_yfv.to_csv(output_paths["known_yfv"], sep="\t", index=False)
     return output_paths
 

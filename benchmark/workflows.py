@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 
+from benchmark.prepare_datasets import align_yfv_embedding_with_airr
 from benchmark.evaluation import (
     compute_cross_donor_overlap,
     compute_known_yfv_recovery,
@@ -75,10 +76,25 @@ def compute_density_by_length(
         "VDJdb / GLC": pd.read_parquet(processed_dir / "vdjdb_glc.parquet"),
         "VDJdb / YLQ": pd.read_parquet(processed_dir / "vdjdb_ylq.parquet"),
     }
-    yfv = pd.read_parquet(processed_dir / "yfv_repertoires.parquet")
-    for donor_id, frame in yfv.groupby("donor_id"):
-        for sample_label, sample_frame in frame.groupby("sample_label"):
-            datasets[f"YFV / {donor_id} / {sample_label}"] = sample_frame.reset_index(drop=True)
+    yfv_manifest_path = processed_dir / "yfv_repertoires_manifest.tsv"
+    if yfv_manifest_path.exists():
+        yfv_manifest = pd.read_csv(yfv_manifest_path, sep="\t")
+        for row in yfv_manifest.itertuples(index=False):
+            donor_id = str(row.donor_id)
+            sample = align_yfv_embedding_with_airr(
+                donor_id,
+                sample_label="sample",
+                embedding_path=Path(row.sample_embedding_path),
+                airr_path=Path(row.sample_airr_path),
+            )
+            background = align_yfv_embedding_with_airr(
+                donor_id,
+                sample_label="background",
+                embedding_path=Path(row.background_embedding_path),
+                airr_path=Path(row.background_airr_path),
+            )
+            datasets[f"YFV / {donor_id} / sample"] = sample
+            datasets[f"YFV / {donor_id} / background"] = background
 
     rows: list[dict[str, object]] = []
     for facet_label, frame in datasets.items():
