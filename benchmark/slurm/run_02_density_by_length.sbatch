@@ -3,6 +3,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=256G
 #SBATCH --time=08:00:00
+#SBATCH --partition=medium
 #SBATCH --output=benchmark/slurm/logs/%x.%j.out
 
 set -euo pipefail

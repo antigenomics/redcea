@@ -2,7 +2,8 @@
 #SBATCH --job-name=redcea_bench_03_vdjdb
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=08:00:00
+#SBATCH --time=02:00:00
+#SBATCH --partition=short
 #SBATCH --output=benchmark/slurm/logs/%x.%A_%a.out
 
 set -euo pipefail
