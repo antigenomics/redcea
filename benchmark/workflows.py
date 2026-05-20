@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 
 import numpy as np
@@ -78,36 +79,21 @@ def compute_density_by_length(
     processed_dir: str | Path = "data/processed",
     *,
     k: int = 5,
+    max_points_per_facet: int | None = None,
+    random_state: int = 17,
 ) -> pd.DataFrame:
     processed_dir = repo_path(processed_dir)
-    datasets = {
-        "VDJdb / GLC": pd.read_parquet(processed_dir / "vdjdb_glc.parquet"),
-        "VDJdb / YLQ": pd.read_parquet(processed_dir / "vdjdb_ylq.parquet"),
-    }
-    yfv_manifest_path = processed_dir / "yfv_repertoires_manifest.tsv"
-    if yfv_manifest_path.exists():
-        yfv_manifest = pd.read_csv(yfv_manifest_path, sep="\t")
-        for row in yfv_manifest.itertuples(index=False):
-            donor_id = str(row.donor_id)
-            sample = align_yfv_embedding_with_airr(
-                donor_id,
-                sample_label="sample",
-                embedding_path=Path(row.sample_embedding_path),
-                airr_path=Path(row.sample_airr_path),
-            )
-            background = align_yfv_embedding_with_airr(
-                donor_id,
-                sample_label="background",
-                embedding_path=Path(row.background_embedding_path),
-                airr_path=Path(row.background_airr_path),
-            )
-            datasets[f"YFV / {donor_id} / sample"] = sample
-            datasets[f"YFV / {donor_id} / background"] = background
+    rng = np.random.default_rng(random_state)
 
     rows: list[dict[str, object]] = []
-    for facet_label, frame in datasets.items():
+
+    def process_facet(facet_label: str, frame: pd.DataFrame) -> None:
         if len(frame) < 2:
-            continue
+            return
+        n_total = len(frame)
+        if max_points_per_facet is not None and n_total > max_points_per_facet:
+            sampled_index = rng.choice(n_total, size=max_points_per_facet, replace=False)
+            frame = frame.iloc[np.sort(sampled_index)].copy()
         embeddings = extract_embeddings(frame)
         n_neighbors = min(max(2, int(k) + 1), len(frame))
         distances, _ = NearestNeighbors(n_neighbors=n_neighbors, metric="euclidean").fit(embeddings).kneighbors(embeddings)
@@ -119,7 +105,38 @@ def compute_density_by_length(
                     "cdr3_length": int(cdr3_length),
                     "knn_distance": float(knn_distance),
                     "k": int(k),
+                    "n_total_facet": int(n_total),
+                    "n_sampled_facet": int(len(frame)),
                 }
+            )
+        del frame, embeddings, distances
+        gc.collect()
+
+    process_facet("VDJdb / GLC", pd.read_parquet(processed_dir / "vdjdb_glc.parquet"))
+    process_facet("VDJdb / YLQ", pd.read_parquet(processed_dir / "vdjdb_ylq.parquet"))
+
+    yfv_manifest_path = processed_dir / "yfv_repertoires_manifest.tsv"
+    if yfv_manifest_path.exists():
+        yfv_manifest = pd.read_csv(yfv_manifest_path, sep="\t")
+        for row in yfv_manifest.itertuples(index=False):
+            donor_id = str(row.donor_id)
+            process_facet(
+                f"YFV / {donor_id} / sample",
+                align_yfv_embedding_with_airr(
+                    donor_id,
+                    sample_label="sample",
+                    embedding_path=Path(row.sample_embedding_path),
+                    airr_path=Path(row.sample_airr_path),
+                ),
+            )
+            process_facet(
+                f"YFV / {donor_id} / background",
+                align_yfv_embedding_with_airr(
+                    donor_id,
+                    sample_label="background",
+                    embedding_path=Path(row.background_embedding_path),
+                    airr_path=Path(row.background_airr_path),
+                ),
             )
     return pd.DataFrame(rows)
 
@@ -130,9 +147,14 @@ def run_density_analysis(
     density_path: str | Path = "results/density/knn_distance_by_length.tsv",
     figure_stem: str | Path = "figures/clustering_strategy/fig1_density_by_length",
     k: int = 5,
+    max_points_per_facet: int | None = None,
 ) -> pd.DataFrame:
     ensure_output_dirs()
-    density_df = compute_density_by_length(processed_dir, k=k)
+    density_df = compute_density_by_length(
+        processed_dir,
+        k=k,
+        max_points_per_facet=max_points_per_facet,
+    )
     density_path = repo_path(density_path)
     density_path.parent.mkdir(parents=True, exist_ok=True)
     density_df.to_csv(density_path, sep="\t", index=False)

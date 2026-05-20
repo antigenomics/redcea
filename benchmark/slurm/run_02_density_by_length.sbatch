@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=redcea_bench_02
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-#SBATCH --time=02:00:00
+#SBATCH --mem=256G
+#SBATCH --time=08:00:00
 #SBATCH --output=benchmark/slurm/logs/%x.%j.out
 
 set -euo pipefail
