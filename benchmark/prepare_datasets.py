@@ -41,6 +41,7 @@ def normalize_segment(series: pd.Series) -> pd.Series:
         .str.split(",")
         .str[0]
         .str.strip()
+        .str.replace(r"\*.*$", "", regex=True)
         .str.replace("/", "_", regex=False)
     )
 
@@ -122,9 +123,16 @@ def read_airr_like_table(path: Path) -> pd.DataFrame:
 
 def standardize_metadata_frame(frame: pd.DataFrame, *, chain_default: str = "TRB") -> pd.DataFrame:
     out = pd.DataFrame(index=frame.index)
-    out["cdr3"] = first_present(frame, ["cdr3", "cdr3aa", "junction_aa", "cdr3_beta_aa", "cdr3_alpha_aa"])
-    out["v_gene"] = normalize_segment(first_present(frame, ["v_gene", "v_call", "v.segm", "TRBV", "TRBV_IMGT", "v"]))
-    out["j_gene"] = normalize_segment(first_present(frame, ["j_gene", "j_call", "j.segm", "TRBJ", "TRBJ_IMGT", "j"]))
+    out["cdr3"] = first_present(
+        frame,
+        ["cdr3", "cdr3aa", "junction_aa", "cdr3aa_beta", "cdr3aa_alpha", "cdr3_beta_aa", "cdr3_alpha_aa"],
+    )
+    out["v_gene"] = normalize_segment(
+        first_present(frame, ["v_gene", "v_call", "v.segm", "v_beta", "v_alpha", "TRBV", "TRAV", "TRBV_IMGT", "v"])
+    )
+    out["j_gene"] = normalize_segment(
+        first_present(frame, ["j_gene", "j_call", "j.segm", "j_beta", "j_alpha", "TRBJ", "TRAJ", "TRBJ_IMGT", "j"])
+    )
     out["chain"] = infer_chain(frame, default=chain_default)
     if "clone_id" in frame.columns:
         out["source_clone_id"] = frame["clone_id"].astype(str)

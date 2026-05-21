@@ -18,6 +18,7 @@ from .plotting import (
     plot_yfv_known_recovery_heatmap,
 )
 from .prepare_datasets import build_source_manifest, write_processed_datasets
+from .repair_vdjdb_assignments import repair_vdjdb_assignments
 from .run_benchmark import build_execution_manifest, build_grid_manifest, consolidate_run_metadata, execute_single_manifest_row
 from .runner import ClusteringBenchmarkRunner, extract_embeddings
 from .workflows import (
@@ -42,6 +43,7 @@ __all__ = [
     "get_method_grid",
     "build_source_manifest",
     "write_processed_datasets",
+    "repair_vdjdb_assignments",
     "build_grid_manifest",
     "build_execution_manifest",
     "consolidate_run_metadata",
