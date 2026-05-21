@@ -15,7 +15,6 @@ if str(ROOT_DIR) not in sys.path:
 from benchmark.data_sources import (
     DEFAULT_TCRVDB_PADJ_THRESHOLD,
     DEFAULT_TCRVDB_PATH,
-    DEFAULT_VDJDB_AIRR_DIR,
     DEFAULT_VDJDB_BG_SOURCE_AIRR,
     DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
     DEFAULT_VDJDB_BG_VJ_AIRR,
@@ -29,8 +28,8 @@ from benchmark.data_sources import (
     VDJDB_TARGETS,
     discover_yfv_donor_ids,
     resolve_vdjdb_background_paths,
-    resolve_vdjdb_airr_path,
     resolve_vdjdb_embedding_path,
+    resolve_vdjdb_rep_path,
     resolve_tcrvdb_path,
     resolve_yfv_embedding_paths,
 )
@@ -263,7 +262,6 @@ def assemble_vdjdb_processed_dataset(
     target_key: str,
     *,
     vdjdb_embed_dir: str | Path = DEFAULT_VDJDB_EMBED_DIR,
-    vdjdb_airr_dir: str | Path = DEFAULT_VDJDB_AIRR_DIR,
     tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
     padj_threshold: float = DEFAULT_TCRVDB_PADJ_THRESHOLD,
 ) -> pd.DataFrame:
@@ -271,16 +269,16 @@ def assemble_vdjdb_processed_dataset(
     epitope_sequence = resolved["epitope_sequence"]
     embedding_frame = pd.read_parquet(resolved["sample_embedding"])
     _metadata_from_embedding, embedding_array = split_embedding_metadata(embedding_frame)
-    airr_path = resolve_vdjdb_airr_path(target_key, vdjdb_airr_dir)
-    airr_frame = read_airr_like_table(airr_path).reset_index(drop=True)
-    standardized = standardize_metadata_frame(airr_frame, chain_default="TRB")
+    rep_path = resolve_vdjdb_rep_path(target_key, vdjdb_embed_dir)
+    rep_frame = read_airr_like_table(rep_path).reset_index(drop=True)
+    standardized = standardize_metadata_frame(rep_frame, chain_default="TRB")
     if len(standardized) != len(embedding_frame):
         raise ValueError(
-            "VDJdb AIRR/embedding row mismatch for {0}: airr_rows={1}, embedding_rows={2}, airr_path={3}, embedding_path={4}".format(
+            "VDJdb representation/embedding row mismatch for {0}: rep_rows={1}, embedding_rows={2}, rep_path={3}, embedding_path={4}".format(
                 target_key,
                 len(standardized),
                 len(embedding_frame),
-                airr_path,
+                rep_path,
                 resolved["sample_embedding"],
             )
         )
@@ -453,7 +451,6 @@ def build_source_manifest(
     yfv_runs_dir: str | Path = DEFAULT_YFV_RUNS_DIR,
     yfv_airr_dir: str | Path = DEFAULT_YFV_AIRR_DIR,
     vdjdb_embed_dir: str | Path = DEFAULT_VDJDB_EMBED_DIR,
-    vdjdb_airr_dir: str | Path = DEFAULT_VDJDB_AIRR_DIR,
     tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
     vdjdb_release_path: str | Path = DEFAULT_VDJDB_RELEASE_PATH,
     vdjdb_full_path: str | Path = DEFAULT_VDJDB_FULL_PATH,
@@ -492,7 +489,7 @@ def build_source_manifest(
 
     for target_key in sorted(VDJDB_TARGETS):
         resolved = resolve_vdjdb_embedding_path(target_key, vdjdb_embed_dir)
-        airr_path = resolve_vdjdb_airr_path(target_key, vdjdb_airr_dir)
+        rep_path = resolve_vdjdb_rep_path(target_key, vdjdb_embed_dir)
         rows.extend(
             [
                 {
@@ -508,9 +505,9 @@ def build_source_manifest(
                     "dataset_group": "vdjdb",
                     "dataset_id": target_key,
                     "sample_label": "sample",
-                    "source_type": "airr",
-                    "path": str(airr_path),
-                    "exists": airr_path.exists(),
+                    "source_type": "representation",
+                    "path": str(rep_path),
+                    "exists": rep_path.exists(),
                     "required": True,
                 },
                 {
@@ -579,7 +576,6 @@ def write_processed_datasets(
     yfv_runs_dir: str | Path = DEFAULT_YFV_RUNS_DIR,
     yfv_airr_dir: str | Path = DEFAULT_YFV_AIRR_DIR,
     vdjdb_embed_dir: str | Path = DEFAULT_VDJDB_EMBED_DIR,
-    vdjdb_airr_dir: str | Path = DEFAULT_VDJDB_AIRR_DIR,
     tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
     padj_threshold: float = DEFAULT_TCRVDB_PADJ_THRESHOLD,
 ) -> dict[str, Path]:
@@ -588,14 +584,12 @@ def write_processed_datasets(
     glc = assemble_vdjdb_processed_dataset(
         "GLC",
         vdjdb_embed_dir=vdjdb_embed_dir,
-        vdjdb_airr_dir=vdjdb_airr_dir,
         tcrvdb_path=tcrvdb_path,
         padj_threshold=padj_threshold,
     )
     ylq = assemble_vdjdb_processed_dataset(
         "YLQ",
         vdjdb_embed_dir=vdjdb_embed_dir,
-        vdjdb_airr_dir=vdjdb_airr_dir,
         tcrvdb_path=tcrvdb_path,
         padj_threshold=padj_threshold,
     )
@@ -620,7 +614,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--yfv-runs-dir", default=str(DEFAULT_YFV_RUNS_DIR))
     parser.add_argument("--yfv-airr-dir", default=str(DEFAULT_YFV_AIRR_DIR))
     parser.add_argument("--vdjdb-embed-dir", default=str(DEFAULT_VDJDB_EMBED_DIR))
-    parser.add_argument("--vdjdb-airr-dir", default=str(DEFAULT_VDJDB_AIRR_DIR))
     parser.add_argument("--tcrvdb-path", default=str(DEFAULT_TCRVDB_PATH))
     parser.add_argument("--vdjdb-release-path", default=str(DEFAULT_VDJDB_RELEASE_PATH))
     parser.add_argument("--vdjdb-full-path", default=str(DEFAULT_VDJDB_FULL_PATH))
@@ -641,7 +634,6 @@ def main() -> int:
         yfv_runs_dir=args.yfv_runs_dir,
         yfv_airr_dir=args.yfv_airr_dir,
         vdjdb_embed_dir=args.vdjdb_embed_dir,
-        vdjdb_airr_dir=args.vdjdb_airr_dir,
         tcrvdb_path=args.tcrvdb_path,
         vdjdb_release_path=args.vdjdb_release_path,
         vdjdb_full_path=args.vdjdb_full_path,
@@ -667,7 +659,6 @@ def main() -> int:
         yfv_runs_dir=args.yfv_runs_dir,
         yfv_airr_dir=args.yfv_airr_dir,
         vdjdb_embed_dir=args.vdjdb_embed_dir,
-        vdjdb_airr_dir=args.vdjdb_airr_dir,
         tcrvdb_path=args.tcrvdb_path,
         padj_threshold=args.padj_threshold,
     )
