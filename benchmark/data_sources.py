@@ -9,6 +9,7 @@ SIBLING_PROJECTS_ROOT = REPO_ROOT.parent
 DEFAULT_VDJDB_MOTIFS_DIR = SIBLING_PROJECTS_ROOT / "vdjdb-motifs"
 DEFAULT_YFV_RUNS_DIR = Path("/projects/immunestatus/pogorelyy/redcea/runs")
 DEFAULT_YFV_AIRR_DIR = Path("/projects/immunestatus/pogorelyy/airr_format")
+DEFAULT_VDJDB_AIRR_DIR = Path("/projects/immunestatus/vdjdb_validation/airr_format")
 DEFAULT_VDJDB_EMBED_DIR = Path("/projects/immunestatus/vdjdb_validation/tcremp")
 DEFAULT_TCRVDB_PATH = Path.home() / "01_05_2025_TCRvdb.csv"
 DEFAULT_VDJDB_RELEASE_PATH = DEFAULT_VDJDB_MOTIFS_DIR / "vdjdb_release" / "vdjdb.slim.txt"
@@ -91,6 +92,12 @@ def resolve_vdjdb_embedding_path(target_key, embed_dir=DEFAULT_VDJDB_EMBED_DIR):
         "sample_embedding": embed_dir / target["embedding_filename"],
         "sample_index": embed_dir / target["index_filename"],
     }
+
+
+def resolve_vdjdb_airr_path(target_key, airr_dir=DEFAULT_VDJDB_AIRR_DIR):
+    target = VDJDB_TARGETS[target_key]
+    airr_dir = Path(airr_dir)
+    return airr_dir / "trb_vdjdb_{0}.tsv".format(target["epitope_sequence"])
 
 
 def resolve_vdjdb_background_paths(
