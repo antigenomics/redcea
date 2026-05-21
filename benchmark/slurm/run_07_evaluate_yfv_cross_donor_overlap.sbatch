@@ -17,4 +17,6 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
-python -m jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 benchmark/notebooks/07_evaluate_yfv_cross_donor_overlap.ipynb
+echo "[$(date)] Starting YFV cross-donor overlap notebook in $(pwd)"
+python -u -m jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 benchmark/notebooks/07_evaluate_yfv_cross_donor_overlap.ipynb
+echo "[$(date)] Finished YFV cross-donor overlap notebook"

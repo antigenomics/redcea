@@ -17,4 +17,6 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
-python -m jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 benchmark/notebooks/05_evaluate_yfv_enrichment.ipynb
+echo "[$(date)] Starting YFV enrichment notebook in $(pwd)"
+python -u -m jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 benchmark/notebooks/05_evaluate_yfv_enrichment.ipynb
+echo "[$(date)] Finished YFV enrichment notebook"

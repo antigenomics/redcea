@@ -17,4 +17,6 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
-python -m jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 benchmark/notebooks/06_evaluate_yfv_known_clonotypes.ipynb
+echo "[$(date)] Starting YFV known clonotype notebook in $(pwd)"
+python -u -m jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 benchmark/notebooks/06_evaluate_yfv_known_clonotypes.ipynb
+echo "[$(date)] Finished YFV known clonotype notebook"

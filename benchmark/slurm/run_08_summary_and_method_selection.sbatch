@@ -17,4 +17,6 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
-python -m jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 benchmark/notebooks/08_summary_and_method_selection.ipynb
+echo "[$(date)] Starting benchmark summary notebook in $(pwd)"
+python -u -m jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 benchmark/notebooks/08_summary_and_method_selection.ipynb
+echo "[$(date)] Finished benchmark summary notebook"

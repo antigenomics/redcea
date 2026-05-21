@@ -17,4 +17,6 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
-python -m jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 benchmark/notebooks/04_evaluate_vdjdb.ipynb
+echo "[$(date)] Starting VDJdb evaluation notebook in $(pwd)"
+python -u -m jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 benchmark/notebooks/04_evaluate_vdjdb.ipynb
+echo "[$(date)] Finished VDJdb evaluation notebook"

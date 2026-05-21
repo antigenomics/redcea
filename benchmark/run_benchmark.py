@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from datetime import datetime
 
 import pandas as pd
 
@@ -16,6 +17,11 @@ from benchmark.prepare_datasets import align_yfv_embedding_with_airr
 from benchmark.runner import ClusteringBenchmarkRunner
 
 
+def log_step(message: str) -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print("[{0}] {1}".format(timestamp, message), flush=True)
+
+
 def consolidate_run_metadata(
     *,
     metadata_parts_dir: str | Path = "results/run_metadata/clustering_run_parts",
@@ -23,8 +29,9 @@ def consolidate_run_metadata(
 ) -> pd.DataFrame:
     metadata_parts_dir = Path(metadata_parts_dir)
     part_files = sorted(metadata_parts_dir.glob("*.tsv"))
+    log_step("Consolidating run metadata from {0}; part_files={1}".format(metadata_parts_dir, len(part_files)))
     if not part_files:
-        return pd.DataFrame(
+        empty = pd.DataFrame(
             columns=[
                 "run_id",
                 "dataset",
@@ -40,6 +47,11 @@ def consolidate_run_metadata(
                 "error_traceback",
             ]
         )
+        metadata_path = Path(metadata_path)
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        empty.to_csv(metadata_path, sep="\t", index=False)
+        log_step("No metadata parts found; wrote empty metadata table: {0}".format(metadata_path))
+        return empty
     frames = [pd.read_csv(path, sep="\t") for path in part_files]
     consolidated = (
         pd.concat(frames, ignore_index=True)
@@ -50,10 +62,20 @@ def consolidate_run_metadata(
     metadata_path = Path(metadata_path)
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     consolidated.to_csv(metadata_path, sep="\t", index=False)
+    status_counts = consolidated["status"].value_counts(dropna=False).to_dict() if "status" in consolidated.columns else {}
+    log_step(
+        "Wrote consolidated metadata rows={0}, unique_runs={1}, status_counts={2}: {3}".format(
+            len(consolidated),
+            consolidated["run_id"].nunique() if "run_id" in consolidated.columns else "NA",
+            status_counts,
+            metadata_path,
+        )
+    )
     return consolidated
 
 
 def build_grid_manifest(include_extended=False):
+    log_step("Building grid manifest; include_extended={0}".format(include_extended))
     rows = []
     for method in get_enabled_methods(include_extended=include_extended):
         for params in get_method_grid(method, include_extended=include_extended):
@@ -65,6 +87,8 @@ def build_grid_manifest(include_extended=False):
             )
     manifest = pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
     manifest.insert(0, "grid_id", ["grid_{0:04d}".format(i) for i in range(len(manifest))])
+    method_counts = manifest["method"].value_counts().to_dict() if len(manifest) else {}
+    log_step("Built grid manifest rows={0}, method_counts={1}".format(len(manifest), method_counts))
     return manifest
 
 
@@ -81,6 +105,7 @@ def _load_vdjdb_processed_inputs(processed_dir):
         )
     glc = pd.read_parquet(processed_dir / "vdjdb_glc.parquet")
     ylq = pd.read_parquet(processed_dir / "vdjdb_ylq.parquet")
+    log_step("Loaded VDJdb processed inputs: GLC rows={0}, YLQ rows={1}".format(len(glc), len(ylq)))
     return glc, ylq
 
 
@@ -101,10 +126,13 @@ def _load_yfv_manifest(processed_dir):
     manifest_path = Path(processed_dir) / "yfv_repertoires_manifest.tsv"
     if not manifest_path.exists():
         raise FileNotFoundError("Processed YFV manifest is missing: {0}".format(manifest_path))
-    return pd.read_csv(manifest_path, sep="\t")
+    manifest = pd.read_csv(manifest_path, sep="\t")
+    log_step("Loaded YFV processed manifest rows={0}: {1}".format(len(manifest), manifest_path))
+    return manifest
 
 
 def build_execution_manifest(processed_dir, include_extended=False):
+    log_step("Building execution manifest from processed_dir={0}".format(processed_dir))
     _validate_vdjdb_processed_inputs(processed_dir)
     yfv_manifest = _load_yfv_manifest(processed_dir)
     grid_manifest = build_grid_manifest(include_extended=include_extended)
@@ -145,7 +173,10 @@ def build_execution_manifest(processed_dir, include_extended=False):
                     "status": "pending",
                 }
             )
-    return pd.DataFrame(rows)
+    manifest = pd.DataFrame(rows)
+    mode_counts = manifest["dataset_mode"].value_counts().to_dict() if len(manifest) else {}
+    log_step("Built execution manifest rows={0}, dataset_mode_counts={1}".format(len(manifest), mode_counts))
+    return manifest
 
 
 def _load_dataset_frame(processed_dir, dataset_mode, dataset, donor_id=None):
