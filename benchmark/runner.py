@@ -24,6 +24,40 @@ from redcea.clustering.preprocess import prepare_data_for_clustering
 from redcea.clustering.vdbscan import vdbscan_from_knn
 
 
+ASSIGNMENT_OUTPUT_COLUMNS = [
+    "run_id",
+    "dataset",
+    "dataset_mode",
+    "epitope",
+    "donor_id",
+    "method",
+    "parameter_json",
+    "clonotype_id",
+    "cdr3",
+    "cdr3_length",
+    "v_gene",
+    "j_gene",
+    "chain",
+    "sample_label",
+    "sample_type",
+    "timepoint",
+    "subject_id",
+    "replicate_id",
+    "truth_label",
+    "label",
+    "cluster_id",
+    "is_noise",
+    "epsilon_used",
+    "leiden_cluster_id",
+    "dbscan_cluster_id",
+    "vdbscan_cluster_id",
+    "local_dbscan_cluster_id",
+    "local_vdbscan_cluster_id",
+    "local_leiden_cluster_id",
+    "final_cluster_id",
+]
+
+
 def extract_embeddings(df: pd.DataFrame) -> np.ndarray:
     if "embedding" in df.columns:
         return np.asarray(df["embedding"].tolist(), dtype=np.float32)
@@ -266,6 +300,32 @@ def standardized_assignment_table(
     return out
 
 
+def slim_assignment_table(assignments: pd.DataFrame, run_id: str) -> pd.DataFrame:
+    out = assignments.copy()
+    if "run_id" not in out.columns:
+        out.insert(0, "run_id", run_id)
+    embedding_columns = [
+        column
+        for column in out.columns
+        if str(column).startswith("emb_") or str(column) == "embedding" or str(column) == "embedding_id"
+    ]
+    if embedding_columns:
+        out = out.drop(columns=embedding_columns)
+    columns = [column for column in ASSIGNMENT_OUTPUT_COLUMNS if column in out.columns]
+    extra_cluster_columns = [
+        column
+        for column in out.columns
+        if column not in columns
+        and (
+            str(column).endswith("_cluster_id")
+            or str(column).startswith("local_")
+            or str(column).startswith("epsilon")
+        )
+    ]
+    columns.extend(extra_cluster_columns)
+    return out.loc[:, columns].copy()
+
+
 @dataclass
 class ClusteringRunResult:
     run_id: str
@@ -456,8 +516,7 @@ class ClusteringBenchmarkRunner:
         return ClusteringRunResult(run_id=run_id, assignments=assignments, metadata=metadata)
 
     def _save(self, run_id: str, assignments: pd.DataFrame, metadata: dict[str, Any]) -> None:
-        out = assignments.copy()
-        out.insert(0, "run_id", run_id)
+        out = slim_assignment_table(assignments, run_id)
         out.to_parquet(self.assignments_dir / "{0}.parquet".format(run_id), index=False)
         pd.DataFrame([metadata]).to_csv(
             self.metadata_parts_dir / "{0}.tsv".format(run_id),

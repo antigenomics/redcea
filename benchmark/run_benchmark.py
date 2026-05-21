@@ -92,23 +92,6 @@ def build_grid_manifest(include_extended=False):
     return manifest
 
 
-def _load_vdjdb_processed_inputs(processed_dir):
-    processed_dir = Path(processed_dir)
-    required = [
-        processed_dir / "vdjdb_glc.parquet",
-        processed_dir / "vdjdb_ylq.parquet",
-    ]
-    missing = [str(path) for path in required if not path.exists()]
-    if missing:
-        raise FileNotFoundError(
-            "Processed benchmark inputs are missing. Expected files: {0}".format(", ".join(missing))
-        )
-    glc = pd.read_parquet(processed_dir / "vdjdb_glc.parquet")
-    ylq = pd.read_parquet(processed_dir / "vdjdb_ylq.parquet")
-    log_step("Loaded VDJdb processed inputs: GLC rows={0}, YLQ rows={1}".format(len(glc), len(ylq)))
-    return glc, ylq
-
-
 def _load_vdjdb_processed_input(processed_dir, dataset):
     processed_dir = Path(processed_dir)
     if dataset == "vdjdb_glc":
