@@ -109,6 +109,21 @@ def _load_vdjdb_processed_inputs(processed_dir):
     return glc, ylq
 
 
+def _load_vdjdb_processed_input(processed_dir, dataset):
+    processed_dir = Path(processed_dir)
+    if dataset == "vdjdb_glc":
+        path = processed_dir / "vdjdb_glc.parquet"
+    elif dataset == "vdjdb_ylq":
+        path = processed_dir / "vdjdb_ylq.parquet"
+    else:
+        raise KeyError("Unknown vdjdb dataset: {0}".format(dataset))
+    if not path.exists():
+        raise FileNotFoundError("Processed VDJdb input is missing: {0}".format(path))
+    frame = pd.read_parquet(path)
+    log_step("Loaded VDJdb processed input dataset={0}, rows={1}: {2}".format(dataset, len(frame), path))
+    return frame
+
+
 def _validate_vdjdb_processed_inputs(processed_dir):
     processed_dir = Path(processed_dir)
     required = [
@@ -181,12 +196,7 @@ def build_execution_manifest(processed_dir, include_extended=False):
 
 def _load_dataset_frame(processed_dir, dataset_mode, dataset, donor_id=None):
     if dataset_mode == "vdjdb":
-        glc, ylq = _load_vdjdb_processed_inputs(processed_dir)
-        if dataset == "vdjdb_glc":
-            return glc
-        if dataset == "vdjdb_ylq":
-            return ylq
-        raise KeyError("Unknown vdjdb dataset: {0}".format(dataset))
+        return _load_vdjdb_processed_input(processed_dir, dataset)
     if dataset_mode == "yfv":
         if donor_id is None:
             raise ValueError("donor_id is required for yfv execution rows")

@@ -30,6 +30,27 @@ from benchmark.runner import extract_embeddings
 from benchmark.data_sources import REPO_ROOT
 
 
+ASSIGNMENT_EVAL_COLUMNS = [
+    "run_id",
+    "dataset",
+    "dataset_mode",
+    "epitope",
+    "donor_id",
+    "method",
+    "parameter_json",
+    "clonotype_id",
+    "cdr3",
+    "cdr3_length",
+    "v_gene",
+    "j_gene",
+    "chain",
+    "sample_label",
+    "truth_label",
+    "cluster_id",
+    "is_noise",
+]
+
+
 def log_step(message: str) -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print("[{0}] {1}".format(timestamp, message), flush=True)
@@ -56,12 +77,38 @@ def ensure_output_dirs() -> None:
     log_step("Ensured benchmark output directories under {0}".format(REPO_ROOT))
 
 
+def read_assignment_parquet(path: Path, columns: list[str] | None = None) -> pd.DataFrame:
+    if columns is None:
+        return pd.read_parquet(path)
+    try:
+        import pyarrow.parquet as pq
+
+        available_columns = set(pq.ParquetFile(path).schema.names)
+        selected_columns = [column for column in columns if column in available_columns]
+        missing_columns = [column for column in columns if column not in available_columns]
+        if missing_columns:
+            log_step("Assignment parquet missing optional columns {0}: {1}".format(missing_columns, path))
+        return pd.read_parquet(path, columns=selected_columns)
+    except Exception as exc:
+        log_step(
+            "Could not inspect parquet schema cheaply for {0}; falling back to full read then column subset. Error: {1}".format(
+                path,
+                exc,
+            )
+        )
+        frame = pd.read_parquet(path)
+        selected_columns = [column for column in columns if column in frame.columns]
+        return frame[selected_columns].copy()
+
+
 def load_assignment_tables(
     assignments_dir: str | Path = "results/clustering_assignments",
     *,
     metadata_parts_dir: str | Path = "results/run_metadata/clustering_run_parts",
     metadata_path: str | Path = "results/run_metadata/clustering_runs.tsv",
     only_success: bool = True,
+    dataset_mode: str | None = None,
+    columns: list[str] | None = ASSIGNMENT_EVAL_COLUMNS,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     ensure_output_dirs()
     assignments_root = repo_path(assignments_dir)
@@ -77,26 +124,35 @@ def load_assignment_tables(
     else:
         status_counts = {}
     log_step("Loaded run metadata rows={0}, status_counts={1}".format(len(run_metadata), status_counts))
-    successful_run_ids: set[str]
-    if only_success and len(run_metadata):
-        successful_run_ids = set(run_metadata.loc[run_metadata["status"] == "success", "run_id"].astype(str))
-    else:
-        successful_run_ids = set(run_metadata["run_id"].astype(str)) if len(run_metadata) else set()
+    selected_metadata = run_metadata.copy()
+    if dataset_mode is not None and len(selected_metadata) and "dataset_mode" in selected_metadata.columns:
+        selected_metadata = selected_metadata.loc[selected_metadata["dataset_mode"] == dataset_mode].copy()
+    elif dataset_mode is not None and len(selected_metadata) and "dataset" in selected_metadata.columns:
+        if dataset_mode == "vdjdb":
+            selected_metadata = selected_metadata.loc[selected_metadata["dataset"].astype(str).str.startswith("vdjdb")].copy()
+        elif dataset_mode == "yfv":
+            selected_metadata = selected_metadata.loc[selected_metadata["dataset"].astype(str).eq("yfv_repertoires")].copy()
+    if only_success and len(selected_metadata) and "status" in selected_metadata.columns:
+        selected_metadata = selected_metadata.loc[selected_metadata["status"] == "success"].copy()
+    selected_run_ids = selected_metadata["run_id"].dropna().astype(str).drop_duplicates().tolist() if len(selected_metadata) else []
     frames = []
-    assignment_paths = sorted(assignments_root.glob("*.parquet"))
+    assignment_paths = [assignments_root / f"{run_id}.parquet" for run_id in selected_run_ids]
+    existing_assignment_paths = [path for path in assignment_paths if path.exists()]
+    missing_assignment_paths = len(assignment_paths) - len(existing_assignment_paths)
     log_step(
-        "Scanning assignment parquet files in {0}: found={1}, only_success={2}, success_ids={3}".format(
+        "Selecting assignment parquet files in {0}: dataset_mode={1}, only_success={2}, selected_runs={3}, existing_files={4}, missing_files={5}, columns={6}".format(
             assignments_root,
-            len(assignment_paths),
+            dataset_mode,
             only_success,
-            len(successful_run_ids),
+            len(selected_run_ids),
+            len(existing_assignment_paths),
+            missing_assignment_paths,
+            "all" if columns is None else len(columns),
         )
     )
     loaded_paths = 0
-    for path in assignment_paths:
-        if only_success and successful_run_ids and path.stem not in successful_run_ids:
-            continue
-        frames.append(pd.read_parquet(path))
+    for path in existing_assignment_paths:
+        frames.append(read_assignment_parquet(path, columns=columns))
         loaded_paths += 1
     assignments = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     log_step(
@@ -106,7 +162,7 @@ def load_assignment_tables(
             len(assignments.columns),
         )
     )
-    return assignments, run_metadata
+    return assignments, selected_metadata
 
 
 def compute_density_by_length(
@@ -235,6 +291,7 @@ def run_vdjdb_evaluation(
         metadata_parts_dir=metadata_parts_dir,
         metadata_path=metadata_path,
         only_success=True,
+        dataset_mode="vdjdb",
     )
     if assignments.empty or "dataset_mode" not in assignments.columns:
         metrics_df = pd.DataFrame()
@@ -279,6 +336,7 @@ def run_yfv_enrichment_evaluation(
         metadata_parts_dir=metadata_parts_dir,
         metadata_path=metadata_path,
         only_success=True,
+        dataset_mode="yfv",
     )
     if assignments.empty or "dataset_mode" not in assignments.columns:
         enrichment_df = pd.DataFrame()
@@ -337,6 +395,7 @@ def run_yfv_known_clonotype_evaluation(
         metadata_parts_dir=metadata_parts_dir,
         metadata_path=metadata_path,
         only_success=True,
+        dataset_mode="yfv",
     )
     if assignments.empty or "dataset_mode" not in assignments.columns:
         recovery_df = pd.DataFrame()
@@ -393,6 +452,7 @@ def run_cross_donor_overlap_evaluation(
         metadata_parts_dir=metadata_parts_dir,
         metadata_path=metadata_path,
         only_success=True,
+        dataset_mode="yfv",
     )
     if assignments.empty or "dataset_mode" not in assignments.columns:
         overlap_df = pd.DataFrame()
