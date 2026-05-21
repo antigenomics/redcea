@@ -6,9 +6,13 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import NearestNeighbors
 
-from benchmark.prepare_datasets import align_yfv_embedding_with_airr
+from benchmark.prepare_datasets import (
+    best_clone_id_key,
+    clone_id_candidates,
+    read_airr_like_table,
+    standardize_metadata_frame,
+)
 from benchmark.evaluation import (
     compute_cross_donor_overlap,
     compute_known_yfv_recovery,
@@ -26,8 +30,7 @@ from benchmark.plotting import (
     plot_yfv_known_recovery_heatmap,
 )
 from benchmark.run_benchmark import consolidate_run_metadata
-from benchmark.runner import extract_embeddings
-from benchmark.data_sources import REPO_ROOT
+from benchmark.data_sources import REPO_ROOT, resolve_vdjdb_embedding_path
 
 
 ASSIGNMENT_EVAL_COLUMNS = [
@@ -175,7 +178,7 @@ def compute_density_by_length(
     processed_dir = repo_path(processed_dir)
     rng = np.random.default_rng(random_state)
     log_step(
-        "Computing density by CDR3 length from {0}; k={1}, max_points_per_facet={2}".format(
+        "Computing density by CDR3 length from {0}; k={1}, max_points_per_facet={2}; using existing FAISS indexes only".format(
             processed_dir,
             k,
             max_points_per_facet,
@@ -184,27 +187,125 @@ def compute_density_by_length(
 
     rows: list[dict[str, object]] = []
 
-    def process_facet(facet_label: str, frame: pd.DataFrame) -> None:
-        if len(frame) < 2:
-            log_step("Skipping density facet {0}: rows={1}".format(facet_label, len(frame)))
+    def read_parquet_metadata_only(path: Path) -> tuple[pd.DataFrame, int]:
+        try:
+            import pyarrow.parquet as pq
+        except Exception as exc:
+            raise RuntimeError("pyarrow is required for metadata-only parquet reads") from exc
+
+        parquet_file = pq.ParquetFile(path)
+        row_count = int(parquet_file.metadata.num_rows)
+        keep_tokens = (
+            "clone",
+            "clonotype",
+            "cdr3",
+            "junction",
+            "v_gene",
+            "j_gene",
+            "v_call",
+            "j_call",
+            "v.segm",
+            "j.segm",
+            "trbv",
+            "trbj",
+            "chain",
+            "locus",
+        )
+        columns = [
+            name
+            for name in parquet_file.schema.names
+            if any(token in str(name).lower() for token in keep_tokens)
+            and not str(name).startswith("emb_")
+            and str(name) not in {"embedding", "embedding_id"}
+        ]
+        if not columns:
+            return pd.DataFrame(index=pd.RangeIndex(row_count)), row_count
+        return pd.read_parquet(path, columns=columns), row_count
+
+    def reconstruct_index_rows(index, row_indices: np.ndarray) -> np.ndarray:
+        row_indices = np.asarray(row_indices, dtype=np.int64)
+        if len(row_indices) == 0:
+            return np.empty((0, int(index.d)), dtype=np.float32)
+        out = np.empty((len(row_indices), int(index.d)), dtype=np.float32)
+        try:
+            for output_position, index_position in enumerate(row_indices):
+                index.reconstruct(int(index_position), out[output_position])
+        except TypeError:
+            for output_position, index_position in enumerate(row_indices):
+                out[output_position] = np.asarray(index.reconstruct(int(index_position)), dtype=np.float32)
+        return out
+
+    def kth_distances_from_existing_index(
+        *,
+        index_path: Path | None,
+        n_neighbors: int,
+        index_expected_rows: int,
+        row_indices: np.ndarray,
+        batch_size: int = 100000,
+    ) -> np.ndarray:
+        if index_path is None or not index_path.exists():
+            raise FileNotFoundError("FAISS index is missing: {0}".format(index_path))
+        try:
+            import faiss  # type: ignore
+        except Exception as exc:
+            raise RuntimeError("faiss is required to reuse existing index files") from exc
+
+        index = faiss.read_index(str(index_path))
+        if int(index.ntotal) != int(index_expected_rows):
+            raise ValueError(
+                "FAISS index row mismatch for {0}: index.ntotal={1}, expected_rows={2}".format(
+                    index_path,
+                    index.ntotal,
+                    index_expected_rows,
+                )
+            )
+        row_indices = np.asarray(row_indices, dtype=np.int64)
+        kth_index = min(int(k), n_neighbors - 1)
+        out = np.empty(len(row_indices), dtype=np.float32)
+        for start in range(0, len(row_indices), batch_size):
+            stop = min(start + batch_size, len(row_indices))
+            query = reconstruct_index_rows(index, row_indices[start:stop])
+            dist_sq, _ = index.search(query, n_neighbors)
+            dist_sq = np.maximum(np.asarray(dist_sq[:, kth_index], dtype=np.float32), 0.0)
+            out[start:stop] = np.sqrt(dist_sq)
+        return out
+
+    def process_facet(facet_label: str, cdr3_lengths: pd.Series, index_path: Path | None = None) -> None:
+        cdr3_lengths = cdr3_lengths.reset_index(drop=True)
+        if len(cdr3_lengths) < 2:
+            log_step("Skipping density facet {0}: rows={1}".format(facet_label, len(cdr3_lengths)))
             return
-        n_total = len(frame)
+        n_total = len(cdr3_lengths)
+        row_indices = np.arange(n_total, dtype=np.int64)
         if max_points_per_facet is not None and n_total > max_points_per_facet:
             sampled_index = rng.choice(n_total, size=max_points_per_facet, replace=False)
-            frame = frame.iloc[np.sort(sampled_index)].copy()
-        embeddings = extract_embeddings(frame)
+            row_indices = np.sort(sampled_index).astype(np.int64, copy=False)
+            cdr3_lengths = cdr3_lengths.iloc[row_indices].reset_index(drop=True)
         log_step(
-            "Density facet {0}: total_rows={1}, used_rows={2}, embedding_dim={3}".format(
+            "Density facet {0}: total_rows={1}, used_rows={2}, index={3}".format(
                 facet_label,
                 n_total,
-                len(frame),
-                embeddings.shape[1],
+                len(cdr3_lengths),
+                index_path,
             )
         )
-        n_neighbors = min(max(2, int(k) + 1), len(frame))
-        distances, _ = NearestNeighbors(n_neighbors=n_neighbors, metric="euclidean").fit(embeddings).kneighbors(embeddings)
-        kth_index = min(int(k), distances.shape[1] - 1)
-        for cdr3_length, knn_distance in zip(frame["cdr3_length"].astype(int), distances[:, kth_index]):
+        n_neighbors = min(max(2, int(k) + 1), n_total)
+        try:
+            knn_distances = kth_distances_from_existing_index(
+                index_path=index_path,
+                n_neighbors=n_neighbors,
+                index_expected_rows=n_total,
+                row_indices=row_indices,
+            )
+            log_step("Density facet {0}: reused FAISS index {1}".format(facet_label, index_path))
+        except Exception as exc:
+            raise RuntimeError(
+                "Density facet {0} requires an existing usable FAISS index: {1}".format(
+                    facet_label,
+                    index_path,
+                )
+            ) from exc
+        for cdr3_length, knn_distance in zip(cdr3_lengths.astype(int), knn_distances):
             rows.append(
                 {
                     "facet_label": facet_label,
@@ -212,14 +313,67 @@ def compute_density_by_length(
                     "knn_distance": float(knn_distance),
                     "k": int(k),
                     "n_total_facet": int(n_total),
-                    "n_sampled_facet": int(len(frame)),
+                    "n_sampled_facet": int(len(cdr3_lengths)),
                 }
             )
-        del frame, embeddings, distances
+        del cdr3_lengths, knn_distances
         gc.collect()
 
-    process_facet("VDJdb / GLC", pd.read_parquet(processed_dir / "vdjdb_glc.parquet"))
-    process_facet("VDJdb / YLQ", pd.read_parquet(processed_dir / "vdjdb_ylq.parquet"))
+    def yfv_cdr3_lengths_from_metadata(
+        *,
+        donor_id: str,
+        sample_label: str,
+        embedding_path: Path,
+        airr_path: Path,
+    ) -> pd.Series:
+        embedding_metadata, embedding_rows = read_parquet_metadata_only(embedding_path)
+        airr_frame = read_airr_like_table(airr_path).reset_index(drop=True)
+        standardized_airr = standardize_metadata_frame(airr_frame, chain_default="TRB")
+        standardized_embedding = standardize_metadata_frame(embedding_metadata, chain_default="TRB")
+        if standardized_embedding["cdr3"].fillna("").astype(str).ne("").any():
+            return standardized_embedding["cdr3"].fillna("").astype(str).str.len().astype(int)
+
+        airr_candidates = clone_id_candidates(airr_frame, sample_label=sample_label)
+        embedding_candidates = clone_id_candidates(embedding_metadata, sample_label=sample_label)
+        match_columns, overlap = best_clone_id_key(embedding_candidates, airr_candidates)
+        if match_columns is not None and overlap == embedding_rows:
+            embedding_key, airr_key = match_columns
+            airr_with_key = standardized_airr.copy()
+            airr_with_key["_merge_clone_id"] = airr_candidates[airr_key].astype(str)
+            embedding_order = pd.DataFrame(
+                {
+                    "_merge_clone_id": embedding_candidates[embedding_key].astype(str),
+                    "_embedding_order": np.arange(embedding_rows, dtype=np.int64),
+                }
+            )
+            merged = embedding_order.merge(airr_with_key[["_merge_clone_id", "cdr3"]], on="_merge_clone_id", how="left", sort=False)
+            if merged["cdr3"].isna().any():
+                raise ValueError("Failed to align density metadata for donor {0} {1}".format(donor_id, sample_label))
+            merged = merged.sort_values("_embedding_order")
+            return merged["cdr3"].fillna("").astype(str).str.len().astype(int).reset_index(drop=True)
+
+        if len(airr_frame) == embedding_rows:
+            return standardized_airr["cdr3"].fillna("").astype(str).str.len().astype(int).reset_index(drop=True)
+        raise ValueError(
+            "Cannot align density metadata for donor {0} {1}: embedding rows={2}, AIRR rows={3}, best clone_id overlap={4}.".format(
+                donor_id,
+                sample_label,
+                embedding_rows,
+                len(airr_frame),
+                overlap,
+            )
+        )
+
+    process_facet(
+        "VDJdb / GLC",
+        pd.read_parquet(processed_dir / "vdjdb_glc.parquet", columns=["cdr3_length"])["cdr3_length"],
+        resolve_vdjdb_embedding_path("GLC")["sample_index"],
+    )
+    process_facet(
+        "VDJdb / YLQ",
+        pd.read_parquet(processed_dir / "vdjdb_ylq.parquet", columns=["cdr3_length"])["cdr3_length"],
+        resolve_vdjdb_embedding_path("YLQ")["sample_index"],
+    )
 
     yfv_manifest_path = processed_dir / "yfv_repertoires_manifest.tsv"
     if yfv_manifest_path.exists():
@@ -229,21 +383,23 @@ def compute_density_by_length(
             donor_id = str(row.donor_id)
             process_facet(
                 f"YFV / {donor_id} / sample",
-                align_yfv_embedding_with_airr(
-                    donor_id,
+                yfv_cdr3_lengths_from_metadata(
+                    donor_id=donor_id,
                     sample_label="sample",
                     embedding_path=Path(row.sample_embedding_path),
                     airr_path=Path(row.sample_airr_path),
                 ),
+                Path(getattr(row, "sample_index_path", Path(row.sample_embedding_path).with_suffix(".index"))),
             )
             process_facet(
                 f"YFV / {donor_id} / background",
-                align_yfv_embedding_with_airr(
-                    donor_id,
+                yfv_cdr3_lengths_from_metadata(
+                    donor_id=donor_id,
                     sample_label="background",
                     embedding_path=Path(row.background_embedding_path),
                     airr_path=Path(row.background_airr_path),
                 ),
+                Path(getattr(row, "background_index_path", Path(row.background_embedding_path).with_suffix(".index"))),
             )
     density_df = pd.DataFrame(rows)
     log_step("Computed density table rows={0}".format(len(density_df)))

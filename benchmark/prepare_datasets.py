@@ -339,6 +339,8 @@ def build_yfv_processed_manifest(
                 "donor_id": donor_id,
                 "sample_embedding_path": str(resolved["sample_embedding"]),
                 "background_embedding_path": str(resolved["background_embedding"]),
+                "sample_index_path": str(resolved["sample_index"]),
+                "background_index_path": str(resolved["background_index"]),
                 "sample_airr_path": str(Path(yfv_airr_dir) / f"{subject}_15_{replicate}.txt"),
                 "background_airr_path": str(Path(yfv_airr_dir) / f"{subject}_0_{replicate}_with_1.txt"),
             }
