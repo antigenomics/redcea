@@ -17,4 +17,4 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
-python benchmark/prepare_datasets.py --strict
+python benchmark/prepare_datasets.py
