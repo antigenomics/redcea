@@ -14,21 +14,16 @@ The benchmark asks:
 The methods under comparison are:
 
 - `dbscan`
-- `vdbscan_length`
+- `vdbscan`
 - `leiden`
-- `leiden_min_size`
 - `leiden_dbscan`
-- `leiden_vdbscan`
-- `dbscan_leiden`
-- `vdbscan_leiden`
+- `hierarchical_leiden`
 
 The initial priority batch is:
 
 - `dbscan`
-- `vdbscan_length`
+- `vdbscan`
 - `leiden`
-- `leiden_vdbscan`
-- `vdbscan_leiden`
 
 ## Datasets
 
@@ -55,7 +50,6 @@ The benchmark also checks recovery of known yellow-fever-associated clonotypes f
 ```text
 benchmark/
   __init__.py
-  runner.py
   evaluation.py
   plotting.py
   README.md
@@ -93,22 +87,20 @@ benchmark/
 
 The benchmark code in this directory is only orchestration and evaluation logic.
 
-It reuses RedCEA internals for:
+Each benchmark run now calls the full `redcea` sample-vs-background pipeline directly.
+This directory is responsible only for:
 
-- PCA preprocessing
-- DBSCAN epsilon estimation
-- DBSCAN clustering
-- CDR3-length grouping
-- vDBSCAN graph clustering
-- Leiden clustering
-
-The benchmark should stay thin. If a core clustering primitive changes, it should change in `redcea/`, not here.
+- validating `sample/background` inputs
+- expanding a hyperparameter grid into a run manifest
+- launching `redcea` once per manifest row
+- converting pipeline outputs into a common evaluation table
+- computing downstream benchmark metrics
 
 ## Expected Inputs
 
-The notebooks expect processed benchmark datasets under `data/processed/`.
+The notebooks expect a dataset manifest under `data/processed/benchmark_dataset_manifest.tsv`.
 
-For source-of-truth validation, `benchmark/prepare_datasets.py` also checks the canonical upstream inputs used to assemble those processed tables:
+`benchmark/prepare_datasets.py` builds that manifest directly from the canonical upstream inputs:
 
 - `TCRvdb` labels for `GLC` / `YLQ`
 - `VDJdb` baseline table
@@ -126,7 +118,7 @@ For the `TRB` VDJdb background, the benchmark follows the same convention as `vd
 
 This matters because the `TRB` background is not treated as an arbitrary file. In the reference workflow, the V/J-matched background is derived from the canonical `100k` source background before running RedCEA-style clustering.
 
-The current benchmark uses only `TRB`, and row order is assumed to be stable when joining embedding parquet files back to clonotype metadata.
+The current benchmark uses only `TRB`.
 
 ## Running on Slurm
 

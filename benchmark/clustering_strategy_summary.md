@@ -16,6 +16,5 @@ This report is the final landing page for the RedCEA clustering proposal benchma
 Populate this report after running notebooks `04` through `08`.
 
 - If Leiden wins on curated VDJdb while VDBSCAN wins on YFV, conclude dataset-specific backends remain preferable.
-- If `vdbscan_leiden` matches Leiden on VDJdb and outperforms on YFV, promote it as the robust default.
-- If `leiden_vdbscan` is strongest overall, recommend it as the default hybrid.
+- If one of `dbscan`, `vdbscan`, `leiden`, `leiden_dbscan`, or `hierarchical_leiden` is strongest on both datasets, promote it as the default.
 - If hybrids do not improve stability, keep the proposal step modular and dataset-dependent.

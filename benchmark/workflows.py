@@ -7,7 +7,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from benchmark.prepare_datasets import (
+from benchmark.airr_utils import (
     best_clone_id_key,
     clone_id_candidates,
     read_airr_like_table,
@@ -30,7 +30,7 @@ from benchmark.plotting import (
     plot_yfv_known_recovery_heatmap,
 )
 from benchmark.run_benchmark import consolidate_run_metadata
-from benchmark.data_sources import REPO_ROOT, resolve_vdjdb_embedding_path
+from benchmark.data_sources import REPO_ROOT
 
 
 ASSIGNMENT_EVAL_COLUMNS = [
@@ -364,43 +364,59 @@ def compute_density_by_length(
             )
         )
 
-    process_facet(
-        "VDJdb / GLC",
-        pd.read_parquet(processed_dir / "vdjdb_glc.parquet", columns=["cdr3_length"])["cdr3_length"],
-        resolve_vdjdb_embedding_path("GLC")["sample_index"],
-    )
-    process_facet(
-        "VDJdb / YLQ",
-        pd.read_parquet(processed_dir / "vdjdb_ylq.parquet", columns=["cdr3_length"])["cdr3_length"],
-        resolve_vdjdb_embedding_path("YLQ")["sample_index"],
-    )
-
-    yfv_manifest_path = processed_dir / "yfv_repertoires_manifest.tsv"
-    if yfv_manifest_path.exists():
-        yfv_manifest = pd.read_csv(yfv_manifest_path, sep="\t")
-        log_step("Density YFV manifest rows={0}: {1}".format(len(yfv_manifest), yfv_manifest_path))
-        for row in yfv_manifest.itertuples(index=False):
-            donor_id = str(row.donor_id)
+    dataset_manifest_path = processed_dir / "benchmark_dataset_manifest.tsv"
+    if not dataset_manifest_path.exists():
+        raise FileNotFoundError("Dataset manifest is missing: {0}".format(dataset_manifest_path))
+    dataset_manifest = pd.read_csv(dataset_manifest_path, sep="\t")
+    log_step("Density dataset manifest rows={0}: {1}".format(len(dataset_manifest), dataset_manifest_path))
+    for row in dataset_manifest.itertuples(index=False):
+        dataset_mode = str(row.dataset_mode)
+        dataset_label = str(row.dataset)
+        if dataset_mode == "vdjdb":
+            epitope_label = str(row.epitope)
             process_facet(
-                f"YFV / {donor_id} / sample",
+                f"VDJdb / {epitope_label} / sample",
                 yfv_cdr3_lengths_from_metadata(
-                    donor_id=donor_id,
+                    donor_id=dataset_label,
                     sample_label="sample",
                     embedding_path=Path(row.sample_embedding_path),
                     airr_path=Path(row.sample_airr_path),
                 ),
-                Path(getattr(row, "sample_index_path", Path(row.sample_embedding_path).with_suffix(".index"))),
+                Path(row.sample_index_path),
             )
             process_facet(
-                f"YFV / {donor_id} / background",
+                f"VDJdb / {epitope_label} / background",
                 yfv_cdr3_lengths_from_metadata(
-                    donor_id=donor_id,
+                    donor_id=dataset_label,
                     sample_label="background",
                     embedding_path=Path(row.background_embedding_path),
                     airr_path=Path(row.background_airr_path),
                 ),
-                Path(getattr(row, "background_index_path", Path(row.background_embedding_path).with_suffix(".index"))),
+                Path(row.background_index_path),
             )
+            continue
+
+        donor_id = str(row.donor_id)
+        process_facet(
+            f"YFV / {donor_id} / sample",
+            yfv_cdr3_lengths_from_metadata(
+                donor_id=donor_id,
+                sample_label="sample",
+                embedding_path=Path(row.sample_embedding_path),
+                airr_path=Path(row.sample_airr_path),
+            ),
+            Path(row.sample_index_path),
+        )
+        process_facet(
+            f"YFV / {donor_id} / background",
+            yfv_cdr3_lengths_from_metadata(
+                donor_id=donor_id,
+                sample_label="background",
+                embedding_path=Path(row.background_embedding_path),
+                airr_path=Path(row.background_airr_path),
+            ),
+            Path(row.background_index_path),
+        )
     density_df = pd.DataFrame(rows)
     log_step("Computed density table rows={0}".format(len(density_df)))
     return density_df

@@ -3,122 +3,99 @@ from __future__ import annotations
 from itertools import product
 
 
-MIN_SAMPLES_GRID = [3, 4, 5, 8, 10]
-K_GRID = [3, 4, 5, 10, 20]
-LEIDEN_RESOLUTION_GRID = [0.1, 0.5, 1.0, 2.0]
-HYBRID_RESOLUTION_GRID = [0.5, 1.0]
+SMALL_GRID = {
+    "dbscan": {
+        "cluster_min_samples": [5],
+        "k_neighbors": [8],
+        "eps_k_neighbors": [8],
+        "cluster_pc_components": [50],
+        "enrichment_test": ["zbinom"],
+    },
+    "vdbscan": {
+        "cluster_min_samples": [5],
+        "k_neighbors": [8],
+        "eps_k_neighbors": [8],
+        "eps_estimation_based_on": ["sample"],
+        "vdbscan_sym_rule": ["asymmetric"],
+        "cluster_pc_components": [50],
+        "enrichment_test": ["zbinom"],
+    },
+    "leiden": {
+        "cluster_min_samples": [5],
+        "k_neighbors": [8],
+        "leiden_resolution": [1.0],
+        "cluster_pc_components": [50],
+        "enrichment_test": ["zbinom"],
+    },
+}
 
 
-PRIORITY_METHODS = [
-    "dbscan",
-    "vdbscan_length",
-    "leiden",
-    "leiden_vdbscan",
-    "vdbscan_leiden",
-]
+LARGE_GRID = {
+    "dbscan": {
+        "cluster_min_samples": [3, 5, 8],
+        "k_neighbors": [4, 8, 15],
+        "eps_k_neighbors": [4, 8, 15],
+        "cluster_pc_components": [50],
+        "enrichment_test": ["zbinom"],
+    },
+    "vdbscan": {
+        "cluster_min_samples": [3, 5, 8],
+        "k_neighbors": [4, 8, 15],
+        "eps_k_neighbors": [4, 8, 15],
+        "eps_estimation_based_on": ["sample", "background"],
+        "vdbscan_sym_rule": ["asymmetric"],
+        "cluster_pc_components": [50],
+        "enrichment_test": ["zbinom"],
+    },
+    "leiden": {
+        "cluster_min_samples": [3, 5, 8],
+        "k_neighbors": [4, 8, 15],
+        "leiden_resolution": [0.5, 1.0, 2.0],
+        "cluster_pc_components": [50],
+        "enrichment_test": ["zbinom"],
+    },
+    "leiden_dbscan": {
+        "cluster_min_samples": [3, 5, 8],
+        "k_neighbors": [4, 8, 15],
+        "eps_k_neighbors": [4, 8, 15],
+        "leiden_resolution": [0.5, 1.0, 2.0],
+        "cluster_pc_components": [50],
+        "enrichment_test": ["zbinom"],
+    },
+    "hierarchical_leiden": {
+        "cluster_min_samples": [3, 5, 8],
+        "k_neighbors": [4, 8, 15],
+        "leiden_resolution": [0.5, 1.0, 2.0],
+        "leiden_sub_resolution": [0.5, 1.0],
+        "cluster_pc_components": [50],
+        "enrichment_test": ["zbinom"],
+    },
+}
 
-EXTENDED_METHODS = [
-    "leiden_min_size",
-    "leiden_dbscan",
-    "dbscan_leiden",
-]
 
-
-def _product_dict(**kwargs):
-    keys = list(kwargs.keys())
-    values = [kwargs[key] for key in keys]
+def _product_dict(param_grid: dict[str, list[object]]) -> list[dict[str, object]]:
+    keys = list(param_grid.keys())
+    values = [param_grid[key] for key in keys]
+    rows = []
     for combo in product(*values):
-        yield dict(zip(keys, combo))
+        rows.append(dict(zip(keys, combo)))
+    return rows
 
 
-def get_method_grid(method, include_extended=False):
-    if method == "dbscan":
-        return list(
-            _product_dict(
-                min_samples=MIN_SAMPLES_GRID,
-                epsilon_strategy=["knee"],
-                percentile=[None],
-                distance_metric=["euclidean"],
-            )
-        )
-    if method == "vdbscan_length":
-        return list(
-            _product_dict(
-                min_samples=MIN_SAMPLES_GRID,
-                epsilon_strategy=["knee"],
-                percentile=[None],
-                min_group_size=[100],
-                distance_metric=["euclidean"],
-            )
-        )
-    if method == "leiden":
-        return list(
-            _product_dict(
-                k=K_GRID,
-                resolution=LEIDEN_RESOLUTION_GRID,
-                distance_metric=["euclidean"],
-            )
-        )
-    if method == "leiden_min_size":
-        return list(
-            _product_dict(
-                k=K_GRID,
-                resolution=LEIDEN_RESOLUTION_GRID,
-                min_cluster_size=MIN_SAMPLES_GRID,
-                distance_metric=["euclidean"],
-            )
-        )
-    if method == "leiden_vdbscan":
-        return list(
-            _product_dict(
-                leiden_k=K_GRID,
-                leiden_resolution=HYBRID_RESOLUTION_GRID,
-                vdbscan_min_samples=MIN_SAMPLES_GRID,
-                epsilon_strategy=["knee"],
-                percentile=[None],
-                min_group_size=[100],
-                distance_metric=["euclidean"],
-            )
-        )
-    if method == "vdbscan_leiden":
-        return list(
-            _product_dict(
-                vdbscan_min_samples=MIN_SAMPLES_GRID,
-                epsilon_strategy=["knee"],
-                percentile=[None],
-                min_group_size=[100],
-                leiden_k=K_GRID,
-                leiden_resolution=HYBRID_RESOLUTION_GRID,
-                distance_metric=["euclidean"],
-            )
-        )
-    if method == "leiden_dbscan":
-        return list(
-            _product_dict(
-                leiden_k=K_GRID,
-                leiden_resolution=HYBRID_RESOLUTION_GRID,
-                dbscan_min_samples=MIN_SAMPLES_GRID,
-                epsilon_strategy=["knee"],
-                percentile=[None],
-                distance_metric=["euclidean"],
-            )
-        )
-    if method == "dbscan_leiden":
-        return list(
-            _product_dict(
-                dbscan_min_samples=MIN_SAMPLES_GRID,
-                epsilon_strategy=["knee"],
-                percentile=[None],
-                leiden_k=K_GRID,
-                leiden_resolution=HYBRID_RESOLUTION_GRID,
-                distance_metric=["euclidean"],
-            )
-        )
-    raise KeyError("Unknown method: {0}".format(method))
+def get_grid_spec(grid_size: str) -> dict[str, dict[str, list[object]]]:
+    if grid_size == "small":
+        return SMALL_GRID
+    if grid_size == "large":
+        return LARGE_GRID
+    raise KeyError("Unknown grid_size: {0}".format(grid_size))
 
 
-def get_enabled_methods(include_extended=False):
-    methods = list(PRIORITY_METHODS)
-    if include_extended:
-        methods.extend(EXTENDED_METHODS)
-    return methods
+def get_enabled_methods(grid_size: str = "small") -> list[str]:
+    return list(get_grid_spec(grid_size).keys())
+
+
+def get_method_grid(method: str, grid_size: str = "small") -> list[dict[str, object]]:
+    grid_spec = get_grid_spec(grid_size)
+    if method not in grid_spec:
+        raise KeyError("Unknown method for grid_size={0}: {1}".format(grid_size, method))
+    return _product_dict(grid_spec[method])

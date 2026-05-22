@@ -7,7 +7,7 @@ from .evaluation import (
     compute_yfv_cluster_enrichment,
     summarize_yfv_enrichment,
 )
-from .grids import EXTENDED_METHODS, PRIORITY_METHODS, get_enabled_methods, get_method_grid
+from .grids import LARGE_GRID, SMALL_GRID, get_enabled_methods, get_grid_spec, get_method_grid
 from .plotting import (
     plot_cross_donor_overlap,
     plot_density_by_length,
@@ -17,10 +17,8 @@ from .plotting import (
     plot_yfv_enrichment_summary,
     plot_yfv_known_recovery_heatmap,
 )
-from .prepare_datasets import build_source_manifest, write_processed_datasets
-from .repair_vdjdb_assignments import repair_vdjdb_assignments
+from .prepare_datasets import write_processed_datasets
 from .run_benchmark import build_execution_manifest, build_grid_manifest, consolidate_run_metadata, execute_single_manifest_row
-from .runner import ClusteringBenchmarkRunner, extract_embeddings
 from .workflows import (
     build_final_method_comparison,
     compute_density_by_length,
@@ -35,15 +33,12 @@ from .workflows import (
 )
 
 __all__ = [
-    "ClusteringBenchmarkRunner",
-    "extract_embeddings",
-    "PRIORITY_METHODS",
-    "EXTENDED_METHODS",
+    "SMALL_GRID",
+    "LARGE_GRID",
     "get_enabled_methods",
+    "get_grid_spec",
     "get_method_grid",
-    "build_source_manifest",
     "write_processed_datasets",
-    "repair_vdjdb_assignments",
     "build_grid_manifest",
     "build_execution_manifest",
     "consolidate_run_metadata",

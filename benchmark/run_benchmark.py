@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
-from pathlib import Path
+import time
+import traceback
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -12,9 +15,13 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from benchmark.airr_utils import standardize_metadata_frame
 from benchmark.grids import get_enabled_methods, get_method_grid
-from benchmark.prepare_datasets import align_yfv_embedding_with_airr
-from benchmark.runner import ClusteringBenchmarkRunner
+from benchmark.prepare_datasets import (
+    DEFAULT_TCRVDB_PADJ_THRESHOLD,
+    build_vdjdb_truth_table,
+)
+from redcea.config import PipelineConfig
 
 
 def log_step(message: str) -> None:
@@ -35,6 +42,7 @@ def consolidate_run_metadata(
             columns=[
                 "run_id",
                 "dataset",
+                "dataset_mode",
                 "method",
                 "parameter_json",
                 "n_points",
@@ -45,40 +53,30 @@ def consolidate_run_metadata(
                 "status",
                 "error_message",
                 "error_traceback",
+                "redcea_output_dir",
             ]
         )
         metadata_path = Path(metadata_path)
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
         empty.to_csv(metadata_path, sep="\t", index=False)
-        log_step("No metadata parts found; wrote empty metadata table: {0}".format(metadata_path))
         return empty
     frames = [pd.read_csv(path, sep="\t") for path in part_files]
     consolidated = (
         pd.concat(frames, ignore_index=True)
-        .sort_values(["dataset", "method", "run_id"])
+        .sort_values(["dataset_mode", "dataset", "method", "run_id"])
         .drop_duplicates(subset=["run_id"], keep="last")
         .reset_index(drop=True)
     )
     metadata_path = Path(metadata_path)
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     consolidated.to_csv(metadata_path, sep="\t", index=False)
-    status_counts = consolidated["status"].value_counts(dropna=False).to_dict() if "status" in consolidated.columns else {}
-    log_step(
-        "Wrote consolidated metadata rows={0}, unique_runs={1}, status_counts={2}: {3}".format(
-            len(consolidated),
-            consolidated["run_id"].nunique() if "run_id" in consolidated.columns else "NA",
-            status_counts,
-            metadata_path,
-        )
-    )
     return consolidated
 
 
-def build_grid_manifest(include_extended=False):
-    log_step("Building grid manifest; include_extended={0}".format(include_extended))
+def build_grid_manifest(grid_size="small"):
     rows = []
-    for method in get_enabled_methods(include_extended=include_extended):
-        for params in get_method_grid(method, include_extended=include_extended):
+    for method in get_enabled_methods(grid_size=grid_size):
+        for params in get_method_grid(method, grid_size=grid_size):
             rows.append(
                 {
                     "method": method,
@@ -87,195 +85,310 @@ def build_grid_manifest(include_extended=False):
             )
     manifest = pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
     manifest.insert(0, "grid_id", ["grid_{0:04d}".format(i) for i in range(len(manifest))])
-    method_counts = manifest["method"].value_counts().to_dict() if len(manifest) else {}
-    log_step("Built grid manifest rows={0}, method_counts={1}".format(len(manifest), method_counts))
     return manifest
 
 
-def _load_vdjdb_processed_input(processed_dir, dataset):
-    processed_dir = Path(processed_dir)
-    if dataset == "vdjdb_glc":
-        path = processed_dir / "vdjdb_glc.parquet"
-    elif dataset == "vdjdb_ylq":
-        path = processed_dir / "vdjdb_ylq.parquet"
-    else:
-        raise KeyError("Unknown vdjdb dataset: {0}".format(dataset))
+def _load_dataset_manifest(processed_dir: str | Path) -> pd.DataFrame:
+    path = Path(processed_dir) / "benchmark_dataset_manifest.tsv"
     if not path.exists():
-        raise FileNotFoundError("Processed VDJdb input is missing: {0}".format(path))
-    frame = pd.read_parquet(path)
-    log_step("Loaded VDJdb processed input dataset={0}, rows={1}: {2}".format(dataset, len(frame), path))
-    return frame
+        raise FileNotFoundError("Dataset manifest is missing: {0}".format(path))
+    return pd.read_csv(path, sep="\t")
 
 
-def _validate_vdjdb_processed_inputs(processed_dir):
-    processed_dir = Path(processed_dir)
-    required = [
-        processed_dir / "vdjdb_glc.parquet",
-        processed_dir / "vdjdb_ylq.parquet",
-    ]
-    missing = [str(path) for path in required if not path.exists()]
-    if missing:
-        raise FileNotFoundError(
-            "Processed benchmark inputs are missing. Expected files: {0}".format(", ".join(missing))
-        )
-
-
-def _load_yfv_manifest(processed_dir):
-    manifest_path = Path(processed_dir) / "yfv_repertoires_manifest.tsv"
-    if not manifest_path.exists():
-        raise FileNotFoundError("Processed YFV manifest is missing: {0}".format(manifest_path))
-    manifest = pd.read_csv(manifest_path, sep="\t")
-    log_step("Loaded YFV processed manifest rows={0}: {1}".format(len(manifest), manifest_path))
-    return manifest
-
-
-def build_execution_manifest(processed_dir, include_extended=False):
-    log_step("Building execution manifest from processed_dir={0}".format(processed_dir))
-    _validate_vdjdb_processed_inputs(processed_dir)
-    yfv_manifest = _load_yfv_manifest(processed_dir)
-    grid_manifest = build_grid_manifest(include_extended=include_extended)
+def build_execution_manifest(processed_dir, grid_size="small"):
+    dataset_manifest = _load_dataset_manifest(processed_dir)
+    grid_manifest = build_grid_manifest(grid_size=grid_size)
     rows = []
-
-    vdjdb_datasets = [
-        ("vdjdb_glc", "GLC"),
-        ("vdjdb_ylq", "YLQ"),
-    ]
-    for _, row in grid_manifest.iterrows():
-        method = row["method"]
-        for dataset_name, epitope in vdjdb_datasets:
-            rows.append(
+    for _, dataset_row in dataset_manifest.iterrows():
+        for _, grid_row in grid_manifest.iterrows():
+            dataset_mode = str(dataset_row["dataset_mode"])
+            dataset = str(dataset_row["dataset"])
+            method = str(grid_row["method"])
+            donor_id = None if pd.isna(dataset_row.get("donor_id")) else str(dataset_row.get("donor_id"))
+            epitope = None if pd.isna(dataset_row.get("epitope")) else str(dataset_row.get("epitope"))
+            if dataset_mode == "vdjdb":
+                run_id = "{0}_{1}_{2}".format(dataset, method, grid_row["grid_id"])
+            else:
+                run_id = "yfv_{0}_{1}_{2}".format(donor_id, method, grid_row["grid_id"])
+            row = dataset_row.to_dict()
+            row.update(
                 {
-                    "grid_id": row["grid_id"],
-                    "run_id": "{0}_{1}_{2}".format(dataset_name, method, row["grid_id"]),
-                    "dataset": dataset_name,
-                    "dataset_mode": "vdjdb",
+                    "grid_id": grid_row["grid_id"],
+                    "run_id": run_id,
+                    "method": method,
+                    "parameter_json": grid_row["parameter_json"],
+                    "status": "pending",
                     "epitope": epitope,
-                    "donor_id": None,
-                    "method": method,
-                    "parameter_json": row["parameter_json"],
-                    "status": "pending",
+                    "donor_id": donor_id,
                 }
             )
-
-        for donor_id in yfv_manifest["donor_id"].astype(str).tolist():
-            rows.append(
-                {
-                    "grid_id": row["grid_id"],
-                    "run_id": "yfv_{0}_{1}_{2}".format(donor_id, method, row["grid_id"]),
-                    "dataset": "yfv_repertoires",
-                    "dataset_mode": "yfv",
-                    "epitope": None,
-                    "donor_id": str(donor_id),
-                    "method": method,
-                    "parameter_json": row["parameter_json"],
-                    "status": "pending",
-                }
-            )
-    manifest = pd.DataFrame(rows)
-    mode_counts = manifest["dataset_mode"].value_counts().to_dict() if len(manifest) else {}
-    log_step("Built execution manifest rows={0}, dataset_mode_counts={1}".format(len(manifest), mode_counts))
-    return manifest
+            rows.append(row)
+    return pd.DataFrame(rows)
 
 
-def _load_dataset_frame(processed_dir, dataset_mode, dataset, donor_id=None):
+def _sample_label_from_clone_id(clone_id: pd.Series) -> pd.Series:
+    clone_id = clone_id.fillna("").astype(str)
+    return pd.Series(
+        ["sample" if value.startswith("s_") else "background" if value.startswith("b_") else None for value in clone_id],
+        index=clone_id.index,
+        dtype="object",
+    )
+
+
+def _build_yfv_annotations(assignments: pd.DataFrame, donor_id: str) -> pd.DataFrame:
+    out = assignments.copy()
+    out["sample_label"] = _sample_label_from_clone_id(out["clone_id"])
+    subject, replicate = donor_id.split("_", 1)
+    out["donor_id"] = donor_id
+    out["subject_id"] = subject
+    out["replicate_id"] = replicate
+    out["timepoint"] = out["sample_label"].map({"sample": "15", "background": "0"})
+    out["sample_type"] = out["sample_label"].map({"sample": "post", "background": "pre"})
+    out["truth_label"] = None
+    return out
+
+
+def _build_vdjdb_annotations(
+    assignments: pd.DataFrame,
+    *,
+    epitope: str,
+    truth_table: pd.DataFrame,
+) -> pd.DataFrame:
+    out = assignments.copy()
+    out["sample_label"] = _sample_label_from_clone_id(out["clone_id"])
+    out["truth_label"] = "unlabeled"
+    sample_mask = out["sample_label"].eq("sample")
+    truth_ep = truth_table.loc[(truth_table["epitope_aa"] == epitope) & (truth_table["chain"] == "TRB")].copy()
+    truth_ep = truth_ep.drop_duplicates(subset=["cdr3", "v_gene", "j_gene", "chain"], keep="first")
+    if sample_mask.any():
+        merged = out.loc[sample_mask, ["cdr3", "v_gene", "j_gene", "chain"]].merge(
+            truth_ep[["cdr3", "v_gene", "j_gene", "chain", "truth_label"]],
+            on=["cdr3", "v_gene", "j_gene", "chain"],
+            how="left",
+        )
+        out.loc[sample_mask, "truth_label"] = merged["truth_label"].fillna("unlabeled").to_numpy()
+    return out
+
+
+def standardize_redcea_assignments(
+    cluster_df: pd.DataFrame,
+    *,
+    run_id: str,
+    dataset: str,
+    dataset_mode: str,
+    method: str,
+    parameter_json: str,
+    epitope: str | None,
+    donor_id: str | None,
+    truth_table: pd.DataFrame,
+) -> pd.DataFrame:
+    standardized = standardize_metadata_frame(cluster_df, chain_default="TRB").reset_index(drop=True)
+    out = cluster_df.copy().reset_index(drop=True)
+    if "junction_aa" not in out.columns and "cdr3" in out.columns:
+        out["junction_aa"] = out["cdr3"]
+    if "v_call" not in out.columns and "v.segm" in out.columns:
+        out["v_call"] = out["v.segm"]
+    if "j_call" not in out.columns and "j.segm" in out.columns:
+        out["j_call"] = out["j.segm"]
+    if "locus" not in out.columns and "chain" in out.columns:
+        out["locus"] = out["chain"].map({"TRB": "beta", "TRA": "alpha"}).fillna(out["chain"])
+
+    out["cdr3"] = standardized["cdr3"]
+    out["v_gene"] = standardized["v_gene"]
+    out["j_gene"] = standardized["j_gene"]
+    out["chain"] = standardized["chain"]
+    out["clonotype_id"] = out["clone_id"].astype(str)
+    out["cdr3_length"] = out["cdr3"].fillna("").astype(str).str.len()
+    out["cluster_id"] = out["cluster_id"].astype(int)
+    out["is_noise"] = out["cluster_id"].eq(-1)
+
     if dataset_mode == "vdjdb":
-        return _load_vdjdb_processed_input(processed_dir, dataset)
-    if dataset_mode == "yfv":
-        if donor_id is None:
-            raise ValueError("donor_id is required for yfv execution rows")
-        yfv_manifest = _load_yfv_manifest(processed_dir)
-        matched = yfv_manifest.loc[yfv_manifest["donor_id"].astype(str) == str(donor_id)]
-        if matched.empty:
-            raise KeyError("Unknown yfv donor_id in manifest: {0}".format(donor_id))
-        row = matched.iloc[0]
-        sample = align_yfv_embedding_with_airr(
-            str(donor_id),
-            sample_label="sample",
-            embedding_path=Path(row["sample_embedding_path"]),
-            airr_path=Path(row["sample_airr_path"]),
-        )
-        background = align_yfv_embedding_with_airr(
-            str(donor_id),
-            sample_label="background",
-            embedding_path=Path(row["background_embedding_path"]),
-            airr_path=Path(row["background_airr_path"]),
-        )
-        return pd.concat([sample, background], ignore_index=True)
-    raise KeyError("Unknown dataset_mode: {0}".format(dataset_mode))
+        out = _build_vdjdb_annotations(out, epitope=str(epitope), truth_table=truth_table)
+        out["sample_type"] = out["sample_label"].map({"sample": "vdjdb_epitope", "background": "background"})
+        out["timepoint"] = None
+        out["subject_id"] = None
+        out["replicate_id"] = None
+        out["donor_id"] = None
+    else:
+        out = _build_yfv_annotations(out, str(donor_id))
+
+    out["run_id"] = run_id
+    out["dataset"] = dataset
+    out["dataset_mode"] = dataset_mode
+    out["epitope"] = epitope
+    out["method"] = method
+    out["parameter_json"] = parameter_json
+
+    keep_columns = [
+        "run_id",
+        "dataset",
+        "dataset_mode",
+        "epitope",
+        "donor_id",
+        "method",
+        "parameter_json",
+        "clonotype_id",
+        "junction_aa",
+        "v_call",
+        "j_call",
+        "locus",
+        "cdr3",
+        "cdr3_length",
+        "v_gene",
+        "j_gene",
+        "chain",
+        "sample_label",
+        "sample_type",
+        "timepoint",
+        "subject_id",
+        "replicate_id",
+        "truth_label",
+        "cluster_id",
+        "is_noise",
+    ]
+    return out[keep_columns].copy()
 
 
-def execute_single_manifest_row(manifest_row, processed_dir, runner):
+def _build_pipeline_config(manifest_row, params, output_dir: Path, nproc: int | None) -> PipelineConfig:
+    env_nproc = os.environ.get("SLURM_CPUS_PER_TASK")
+    resolved_nproc = nproc if nproc is not None else (int(env_nproc) if env_nproc else None)
+    return PipelineConfig(
+        sample=str(manifest_row["sample_airr_path"]),
+        background=str(manifest_row["background_airr_path"]),
+        output=str(output_dir),
+        prefix=str(manifest_row["run_id"]),
+        index_col=None,
+        chain=str(manifest_row.get("chain", "TRB")),
+        species=str(manifest_row.get("species", "HomoSapiens")),
+        prototypes_path=None,
+        nproc=resolved_nproc,
+        lower_len_cdr3=None,
+        higher_len_cdr3=None,
+        metrics="euclidean",
+        sample_embedding=str(manifest_row["sample_embedding_path"]),
+        background_embedding=str(manifest_row["background_embedding_path"]),
+        n_bg_points=None,
+        n_clonotypes=None,
+        sample_random_clonotypes=False,
+        random_seed=int(params.get("random_seed", 17)),
+        cluster_pc_components=int(params.get("cluster_pc_components", 50)),
+        cluster_min_samples=int(params.get("cluster_min_samples", 5)),
+        k_neighbors=int(params.get("k_neighbors", 4)),
+        eps_k_neighbors=int(params.get("eps_k_neighbors", params.get("k_neighbors", 4))),
+        leiden_resolution=float(params.get("leiden_resolution", 1.0)),
+        leiden_sub_resolution=float(params.get("leiden_sub_resolution", 1.0)),
+        cluster_algo=str(manifest_row["method"]),
+        eps_estimation_based_on=str(params.get("eps_estimation_based_on", "sample")),
+        vdbscan_sym_rule=str(params.get("vdbscan_sym_rule", "asymmetric")),
+        enrichment_test=str(params.get("enrichment_test", "zbinom")),
+        debug_save_intermediate=False,
+        debug_output_dir=None,
+    )
+
+
+def _save_run_metadata(metadata_parts_dir: Path, metadata: dict[str, object]) -> None:
+    metadata_parts_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([metadata]).to_csv(
+        metadata_parts_dir / "{0}.tsv".format(metadata["run_id"]),
+        sep="\t",
+        index=False,
+    )
+
+
+def execute_single_manifest_row(
+    manifest_row,
+    *,
+    assignments_dir: str | Path,
+    metadata_parts_dir: str | Path,
+    redcea_runs_dir: str | Path,
+    tcrvdb_path: str | Path,
+    padj_threshold: float,
+    nproc: int | None,
+):
+    run_id = str(manifest_row["run_id"])
     params = json.loads(manifest_row["parameter_json"])
-    print(
-        "Starting run_id={0} dataset_mode={1} dataset={2} donor_id={3} epitope={4} method={5} params={6}".format(
-            manifest_row["run_id"],
-            manifest_row["dataset_mode"],
-            manifest_row["dataset"],
-            manifest_row.get("donor_id"),
-            manifest_row.get("epitope"),
-            manifest_row["method"],
-            manifest_row["parameter_json"],
-        ),
-        flush=True,
-    )
-    frame = _load_dataset_frame(
-        processed_dir,
-        dataset_mode=manifest_row["dataset_mode"],
-        dataset=manifest_row["dataset"],
-        donor_id=manifest_row.get("donor_id"),
-    )
-    print("Loaded input frame for {0}: n_rows={1}, n_cols={2}".format(manifest_row["run_id"], len(frame), len(frame.columns)), flush=True)
-    result = runner.run(
-        frame,
-        dataset=manifest_row["dataset"],
-        dataset_mode=manifest_row["dataset_mode"],
-        method=manifest_row["method"],
-        parameters=params,
-        epitope=None if pd.isna(manifest_row.get("epitope")) else manifest_row.get("epitope"),
-        donor_id=None if pd.isna(manifest_row.get("donor_id")) else str(manifest_row.get("donor_id")),
-        run_id=manifest_row["run_id"],
-    )
-    print(
-        "Finished run_id={0} status={1} n_points={2} n_clusters={3} n_noise={4} runtime_seconds={5}".format(
-            result.run_id,
-            result.metadata.get("status"),
-            result.metadata.get("n_points"),
-            result.metadata.get("n_clusters"),
-            result.metadata.get("n_noise"),
-            result.metadata.get("runtime_seconds"),
-        ),
-        flush=True,
-    )
-    if result.metadata.get("status") != "success":
-        print("ERROR run_id={0}: {1}".format(result.run_id, result.metadata.get("error_message", "")), flush=True)
-        traceback_text = str(result.metadata.get("error_traceback", "") or "").strip()
-        if traceback_text:
-            print("TRACEBACK run_id={0}:\n{1}".format(result.run_id, traceback_text), flush=True)
-    return result
+    redcea_output_dir = Path(redcea_runs_dir) / run_id
+    redcea_output_dir.mkdir(parents=True, exist_ok=True)
+    truth_table = build_vdjdb_truth_table(tcrvdb_path, padj_threshold=padj_threshold)
+    started = time.perf_counter()
+    error_traceback = ""
+    assignments = None
+    try:
+        from redcea.pipeline import run_redcea_pipeline
 
-
-def execute_manifest(manifest, processed_dir, runner):
-    executed_rows = []
-    for _, row in manifest.iterrows():
-        result = execute_single_manifest_row(row, processed_dir, runner)
-        executed_rows.append(
-            {
-                "grid_id": row["grid_id"],
-                "run_id": result.run_id,
-                "dataset": row["dataset"],
-                "dataset_mode": row["dataset_mode"],
-                "epitope": row.get("epitope"),
-                "donor_id": row.get("donor_id"),
-                "method": row["method"],
-                "parameter_json": row["parameter_json"],
-                "status": result.metadata["status"],
-            }
+        config = _build_pipeline_config(manifest_row, params, redcea_output_dir, nproc=nproc)
+        artifacts = run_redcea_pipeline(config)
+        assignments = standardize_redcea_assignments(
+            artifacts.cluster_df,
+            run_id=run_id,
+            dataset=str(manifest_row["dataset"]),
+            dataset_mode=str(manifest_row["dataset_mode"]),
+            method=str(manifest_row["method"]),
+            parameter_json=str(manifest_row["parameter_json"]),
+            epitope=None if pd.isna(manifest_row.get("epitope")) else str(manifest_row.get("epitope")),
+            donor_id=None if pd.isna(manifest_row.get("donor_id")) else str(manifest_row.get("donor_id")),
+            truth_table=truth_table,
         )
-    return pd.DataFrame(executed_rows)
+        status = "success"
+        error_message = ""
+    except Exception as exc:
+        status = "error"
+        error_message = "{0}: {1}".format(type(exc).__name__, str(exc))
+        error_traceback = traceback.format_exc()
+
+    runtime_seconds = time.perf_counter() - started
+    metadata = {
+        "run_id": run_id,
+        "dataset": str(manifest_row["dataset"]),
+        "dataset_mode": str(manifest_row["dataset_mode"]),
+        "method": str(manifest_row["method"]),
+        "parameter_json": str(manifest_row["parameter_json"]),
+        "n_points": int(len(assignments)) if assignments is not None else 0,
+        "n_clusters": int(assignments.loc[~assignments["is_noise"], "cluster_id"].nunique()) if assignments is not None else 0,
+        "n_noise": int(assignments["is_noise"].sum()) if assignments is not None else 0,
+        "noise_fraction": float(assignments["is_noise"].mean()) if assignments is not None and len(assignments) else 0.0,
+        "runtime_seconds": float(runtime_seconds),
+        "status": status,
+        "error_message": error_message,
+        "error_traceback": error_traceback,
+        "redcea_output_dir": str(redcea_output_dir),
+    }
+    if assignments is not None:
+        assignments_dir = Path(assignments_dir)
+        assignments_dir.mkdir(parents=True, exist_ok=True)
+        assignments.to_parquet(assignments_dir / "{0}.parquet".format(run_id), index=False)
+    _save_run_metadata(Path(metadata_parts_dir), metadata)
+    return metadata
+
+
+def execute_manifest(
+    manifest: pd.DataFrame,
+    *,
+    assignments_dir: str | Path,
+    metadata_parts_dir: str | Path,
+    redcea_runs_dir: str | Path,
+    tcrvdb_path: str | Path,
+    padj_threshold: float,
+    nproc: int | None,
+) -> pd.DataFrame:
+    rows = []
+    for _, row in manifest.iterrows():
+        rows.append(
+            execute_single_manifest_row(
+                row,
+                assignments_dir=assignments_dir,
+                metadata_parts_dir=metadata_parts_dir,
+                redcea_runs_dir=redcea_runs_dir,
+                tcrvdb_path=tcrvdb_path,
+                padj_threshold=padj_threshold,
+                nproc=nproc,
+            )
+        )
+    return pd.DataFrame(rows)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run the RedCEA clustering proposal benchmark grid.")
+    parser = argparse.ArgumentParser(description="Run the RedCEA clustering benchmark over a hyperparameter grid.")
     parser.add_argument("--processed-dir", default="data/processed")
     parser.add_argument("--manifest-path", default="results/run_metadata/clustering_grid_manifest.tsv")
     parser.add_argument("--vdjdb-manifest-path", default="results/run_metadata/clustering_manifest_vdjdb.tsv")
@@ -284,8 +397,11 @@ def parse_args():
     parser.add_argument("--assignments-dir", default="results/clustering_assignments")
     parser.add_argument("--run-metadata-path", default="results/run_metadata/clustering_runs.tsv")
     parser.add_argument("--metadata-parts-dir", default="results/run_metadata/clustering_run_parts")
-    parser.add_argument("--pca-components", type=int, default=50)
-    parser.add_argument("--include-extended", action="store_true")
+    parser.add_argument("--redcea-runs-dir", default="results/redcea_runs")
+    parser.add_argument("--tcrvdb-path", default=str(Path.home() / "01_05_2025_TCRvdb.csv"))
+    parser.add_argument("--padj-threshold", type=float, default=DEFAULT_TCRVDB_PADJ_THRESHOLD)
+    parser.add_argument("--nproc", type=int, default=None)
+    parser.add_argument("--grid-size", choices=["small", "large"], default="small")
     parser.add_argument("--mode", choices=["manifest", "single", "all", "consolidate"], default="all")
     parser.add_argument("--single-manifest-path", default=None)
     parser.add_argument("--single-row-index", type=int, default=None, help="1-based manifest row index for Slurm arrays.")
@@ -295,79 +411,60 @@ def parse_args():
 def main():
     args = parse_args()
     if args.mode == "consolidate":
-        consolidated = consolidate_run_metadata(
+        consolidate_run_metadata(
             metadata_parts_dir=args.metadata_parts_dir,
             metadata_path=args.run_metadata_path,
-        )
-        print(
-            "Consolidated run metadata: {0} rows -> {1}".format(
-                len(consolidated),
-                args.run_metadata_path,
-            ),
-            flush=True,
         )
         return 0
 
     if args.mode == "single":
         if args.single_manifest_path is None or args.single_row_index is None:
             raise ValueError("--single-manifest-path and --single-row-index are required for mode=single")
-        runner = ClusteringBenchmarkRunner(
-            assignments_dir=args.assignments_dir,
-            metadata_path=args.run_metadata_path,
-            metadata_parts_dir=args.metadata_parts_dir,
-            pca_components=args.pca_components,
-        )
         manifest = pd.read_csv(args.single_manifest_path, sep="\t")
-        print(
-            "Array task row={0} manifest={1} manifest_rows={2}".format(
-                args.single_row_index,
-                args.single_manifest_path,
-                len(manifest),
-            ),
-            flush=True,
-        )
         row = manifest.iloc[int(args.single_row_index) - 1]
-        execute_single_manifest_row(row, args.processed_dir, runner)
+        execute_single_manifest_row(
+            row,
+            assignments_dir=args.assignments_dir,
+            metadata_parts_dir=args.metadata_parts_dir,
+            redcea_runs_dir=args.redcea_runs_dir,
+            tcrvdb_path=args.tcrvdb_path,
+            padj_threshold=args.padj_threshold,
+            nproc=args.nproc,
+        )
         return 0
 
-    grid_manifest = build_grid_manifest(include_extended=args.include_extended)
+    grid_manifest = build_grid_manifest(grid_size=args.grid_size)
     manifest_path = Path(args.manifest_path)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     grid_manifest.to_csv(manifest_path, sep="\t", index=False)
-    print("Wrote grid manifest: {0} ({1} parameter rows)".format(manifest_path, len(grid_manifest)), flush=True)
 
-    execution_manifest = build_execution_manifest(args.processed_dir, include_extended=args.include_extended)
+    execution_manifest = build_execution_manifest(args.processed_dir, grid_size=args.grid_size)
     execution_path = Path(args.execution_path)
     execution_path.parent.mkdir(parents=True, exist_ok=True)
     execution_manifest.to_csv(execution_path, sep="\t", index=False)
-    vdjdb_manifest = execution_manifest.loc[execution_manifest["dataset_mode"] == "vdjdb"]
-    yfv_manifest = execution_manifest.loc[execution_manifest["dataset_mode"] == "yfv"]
-    vdjdb_manifest.to_csv(
+    execution_manifest.loc[execution_manifest["dataset_mode"] == "vdjdb"].to_csv(
         Path(args.vdjdb_manifest_path),
         sep="\t",
         index=False,
     )
-    yfv_manifest.to_csv(
+    execution_manifest.loc[execution_manifest["dataset_mode"] == "yfv"].to_csv(
         Path(args.yfv_manifest_path),
         sep="\t",
         index=False,
     )
-    print("Wrote execution manifest: {0} ({1} total rows)".format(execution_path, len(execution_manifest)), flush=True)
-    print("Wrote VDJdb manifest: {0} ({1} array tasks)".format(args.vdjdb_manifest_path, len(vdjdb_manifest)), flush=True)
-    print("Wrote YFV manifest: {0} ({1} array tasks)".format(args.yfv_manifest_path, len(yfv_manifest)), flush=True)
-    print("Methods: {0}".format(", ".join(grid_manifest["method"].drop_duplicates().astype(str).tolist())), flush=True)
 
     if args.mode == "manifest":
         return 0
 
-    runner = ClusteringBenchmarkRunner(
+    execute_manifest(
+        execution_manifest,
         assignments_dir=args.assignments_dir,
-        metadata_path=args.run_metadata_path,
         metadata_parts_dir=args.metadata_parts_dir,
-        pca_components=args.pca_components,
+        redcea_runs_dir=args.redcea_runs_dir,
+        tcrvdb_path=args.tcrvdb_path,
+        padj_threshold=args.padj_threshold,
+        nproc=args.nproc,
     )
-    executed = execute_manifest(execution_manifest, args.processed_dir, runner)
-    executed.to_csv(execution_path, sep="\t", index=False)
     consolidate_run_metadata(
         metadata_parts_dir=args.metadata_parts_dir,
         metadata_path=args.run_metadata_path,
