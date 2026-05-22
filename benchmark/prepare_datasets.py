@@ -16,8 +16,8 @@ from benchmark.data_sources import (
     DEFAULT_TCRVDB_PADJ_THRESHOLD,
     DEFAULT_TCRVDB_PATH,
     DEFAULT_VDJDB_AIRR_DIR,
-    DEFAULT_VDJDB_BG_VJ_AIRR,
-    DEFAULT_VDJDB_BG_VJ_EMBEDDING,
+    DEFAULT_VDJDB_BG_SOURCE_AIRR,
+    DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
     DEFAULT_VDJDB_EMBED_DIR,
     DEFAULT_YFV_AIRR_DIR,
     DEFAULT_YFV_KNOWN_EPITOPES,
@@ -144,8 +144,8 @@ def build_dataset_manifest(
     yfv_airr_dir: str | Path = DEFAULT_YFV_AIRR_DIR,
     vdjdb_embed_dir: str | Path = DEFAULT_VDJDB_EMBED_DIR,
     vdjdb_airr_dir: str | Path = DEFAULT_VDJDB_AIRR_DIR,
-    vdjdb_bg_airr: str | Path = DEFAULT_VDJDB_BG_VJ_AIRR,
-    vdjdb_bg_embedding: str | Path = DEFAULT_VDJDB_BG_VJ_EMBEDDING,
+    vdjdb_bg_airr: str | Path = DEFAULT_VDJDB_BG_SOURCE_AIRR,
+    vdjdb_bg_embedding: str | Path = DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     vdjdb_background_airr = Path(vdjdb_bg_airr)
@@ -171,7 +171,7 @@ def build_dataset_manifest(
                 "background_embedding_path": str(vdjdb_background_embedding),
                 "sample_index_path": str(resolved["sample_index"]),
                 "background_index_path": str(vdjdb_background_embedding.with_suffix(".index")),
-                "background_kind": "vj_matched_vdjdb_motifs_trb_background",
+                "background_kind": "vdjdb_motifs_trb_background_100k",
             }
         )
 
@@ -211,8 +211,8 @@ def write_processed_datasets(
     yfv_airr_dir: str | Path = DEFAULT_YFV_AIRR_DIR,
     vdjdb_embed_dir: str | Path = DEFAULT_VDJDB_EMBED_DIR,
     vdjdb_airr_dir: str | Path = DEFAULT_VDJDB_AIRR_DIR,
-    vdjdb_bg_airr: str | Path = DEFAULT_VDJDB_BG_VJ_AIRR,
-    vdjdb_bg_embedding: str | Path = DEFAULT_VDJDB_BG_VJ_EMBEDDING,
+    vdjdb_bg_airr: str | Path = DEFAULT_VDJDB_BG_SOURCE_AIRR,
+    vdjdb_bg_embedding: str | Path = DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
     tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
 ) -> dict[str, Path]:
     processed_dir = Path(processed_dir)
@@ -241,8 +241,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--yfv-airr-dir", default=str(DEFAULT_YFV_AIRR_DIR))
     parser.add_argument("--vdjdb-embed-dir", default=str(DEFAULT_VDJDB_EMBED_DIR))
     parser.add_argument("--vdjdb-airr-dir", default=str(DEFAULT_VDJDB_AIRR_DIR))
-    parser.add_argument("--vdjdb-bg-airr", default=str(DEFAULT_VDJDB_BG_VJ_AIRR))
-    parser.add_argument("--vdjdb-bg-embedding", default=str(DEFAULT_VDJDB_BG_VJ_EMBEDDING))
+    parser.add_argument("--vdjdb-bg-airr", default=str(DEFAULT_VDJDB_BG_SOURCE_AIRR))
+    parser.add_argument("--vdjdb-bg-embedding", default=str(DEFAULT_VDJDB_BG_SOURCE_EMBEDDING))
     parser.add_argument("--tcrvdb-path", default=str(DEFAULT_TCRVDB_PATH))
     parser.add_argument("--processed-dir", default="data/processed")
     return parser.parse_args()

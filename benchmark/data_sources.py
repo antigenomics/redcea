@@ -17,8 +17,6 @@ DEFAULT_VDJDB_RELEASE_PATH = DEFAULT_VDJDB_MOTIFS_DIR / "vdjdb_release" / "vdjdb
 DEFAULT_VDJDB_FULL_PATH = DEFAULT_VDJDB_MOTIFS_DIR / "redcea" / "data" / "vdjdb_full.txt"
 DEFAULT_VDJDB_BG_SOURCE_AIRR = DEFAULT_VDJDB_MOTIFS_DIR / "redcea" / "data" / "backgrounds" / "trb_background_100k.tsv"
 DEFAULT_VDJDB_BG_SOURCE_EMBEDDING = DEFAULT_VDJDB_MOTIFS_DIR / "redcea" / "data" / "backgrounds" / "trb_background_embeddings.parquet"
-DEFAULT_VDJDB_BG_VJ_AIRR = DEFAULT_VDJDB_MOTIFS_DIR / "results" / "redcea" / "backgrounds" / "trb_background_vj.tsv"
-DEFAULT_VDJDB_BG_VJ_EMBEDDING = DEFAULT_VDJDB_MOTIFS_DIR / "results" / "redcea" / "backgrounds" / "trb_background_vj_embeddings.parquet"
 DEFAULT_TCRVDB_PADJ_THRESHOLD = 1e-5
 DEFAULT_YFV_KNOWN_EPITOPES = ("ATDALMTGF", "LLWNGPMAV")
 
@@ -100,20 +98,6 @@ def resolve_vdjdb_rep_path(target_key, airr_dir=DEFAULT_VDJDB_AIRR_DIR):
     target = VDJDB_TARGETS[target_key]
     airr_dir = Path(airr_dir)
     return airr_dir / target["representation_filename"]
-
-
-def resolve_vdjdb_background_paths(
-    source_airr=DEFAULT_VDJDB_BG_SOURCE_AIRR,
-    source_embedding=DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
-    vj_airr=DEFAULT_VDJDB_BG_VJ_AIRR,
-    vj_embedding=DEFAULT_VDJDB_BG_VJ_EMBEDDING,
-):
-    return {
-        "source_airr": Path(source_airr),
-        "source_embedding": Path(source_embedding),
-        "vj_airr": Path(vj_airr),
-        "vj_embedding": Path(vj_embedding),
-    }
 
 
 def resolve_tcrvdb_path(path=DEFAULT_TCRVDB_PATH):

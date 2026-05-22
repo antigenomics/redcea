@@ -109,14 +109,10 @@ The notebooks expect a dataset manifest under `data/processed/benchmark_dataset_
 - `YFV` sample/background embeddings in `/projects/immunestatus/pogorelyy/redcea/runs/yfv_*`
 - `YFV` AIRR tables in `/projects/immunestatus/pogorelyy/airr_format`
 
-For the `TRB` VDJdb background, the benchmark follows the same convention as `vdjdb-motifs`:
+For the `TRB` VDJdb background, the benchmark uses the canonical `vdjdb-motifs` source background directly:
 
-- canonical source background: `trb_background_100k.tsv`
-- canonical source background embedding: `trb_background_embeddings.parquet`
-- derived V/J-matched background: `trb_background_vj.tsv`
-- derived V/J-matched background embedding: `trb_background_vj_embeddings.parquet`
-
-This matters because the `TRB` background is not treated as an arbitrary file. In the reference workflow, the V/J-matched background is derived from the canonical `100k` source background before running RedCEA-style clustering.
+- `redcea/data/backgrounds/trb_background_100k.tsv`
+- `redcea/data/backgrounds/trb_background_embeddings.parquet`
 
 The current benchmark uses only `TRB`.
 
