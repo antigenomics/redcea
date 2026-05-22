@@ -7,9 +7,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SIBLING_PROJECTS_ROOT = REPO_ROOT.parent
 DEFAULT_VDJDB_MOTIFS_DIR = SIBLING_PROJECTS_ROOT / "vdjdb-motifs"
+DEFAULT_VDJDB_MOTIFS_RESULTS_DIR = DEFAULT_VDJDB_MOTIFS_DIR / "results" / "redcea"
 DEFAULT_YFV_RUNS_DIR = Path("/projects/immunestatus/pogorelyy/redcea/runs")
 DEFAULT_YFV_AIRR_DIR = Path("/projects/immunestatus/pogorelyy/airr_format")
-DEFAULT_VDJDB_EMBED_DIR = Path("/projects/immunestatus/vdjdb/tcremp")
+DEFAULT_VDJDB_EMBED_DIR = DEFAULT_VDJDB_MOTIFS_RESULTS_DIR / "tcremp"
+DEFAULT_VDJDB_AIRR_DIR = DEFAULT_VDJDB_MOTIFS_RESULTS_DIR / "airr_format"
 DEFAULT_TCRVDB_PATH = Path.home() / "01_05_2025_TCRvdb.csv"
 DEFAULT_VDJDB_RELEASE_PATH = DEFAULT_VDJDB_MOTIFS_DIR / "vdjdb_release" / "vdjdb.slim.txt"
 DEFAULT_VDJDB_FULL_PATH = DEFAULT_VDJDB_MOTIFS_DIR / "redcea" / "data" / "vdjdb_full.txt"
@@ -23,15 +25,15 @@ DEFAULT_YFV_KNOWN_EPITOPES = ("ATDALMTGF", "LLWNGPMAV")
 VDJDB_TARGETS = {
     "GLC": {
         "epitope_sequence": "GLCTLVAML",
-        "embedding_filename": "trb_vdjdb_GLCTLVAML_embeddings.parquet",
-        "index_filename": "trb_vdjdb_GLCTLVAML_embeddings_faiss.index",
-        "representation_filename": "trb_vdjdb_GLCTLVAML_rep.tsv",
+        "embedding_filename": "trb_vdjdb_GLCTLVAML_sample_embeddings.parquet",
+        "index_filename": "trb_vdjdb_GLCTLVAML_sample_embeddings.index",
+        "representation_filename": "trb_vdjdb_GLCTLVAML.tsv",
     },
     "YLQ": {
         "epitope_sequence": "YLQPRTFLL",
-        "embedding_filename": "trb_vdjdb_YLQPRTFLL_embeddings.parquet",
-        "index_filename": "trb_vdjdb_YLQPRTFLL_embeddings_faiss.index",
-        "representation_filename": "trb_vdjdb_YLQPRTFLL_rep.tsv",
+        "embedding_filename": "trb_vdjdb_YLQPRTFLL_sample_embeddings.parquet",
+        "index_filename": "trb_vdjdb_YLQPRTFLL_sample_embeddings.index",
+        "representation_filename": "trb_vdjdb_YLQPRTFLL.tsv",
     },
 }
 
@@ -94,10 +96,10 @@ def resolve_vdjdb_embedding_path(target_key, embed_dir=DEFAULT_VDJDB_EMBED_DIR):
         "sample_index": embed_dir / target["index_filename"],
     }
 
-def resolve_vdjdb_rep_path(target_key, embed_dir=DEFAULT_VDJDB_EMBED_DIR):
+def resolve_vdjdb_rep_path(target_key, airr_dir=DEFAULT_VDJDB_AIRR_DIR):
     target = VDJDB_TARGETS[target_key]
-    embed_dir = Path(embed_dir)
-    return embed_dir / target["representation_filename"]
+    airr_dir = Path(airr_dir)
+    return airr_dir / target["representation_filename"]
 
 
 def resolve_vdjdb_background_paths(

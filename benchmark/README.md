@@ -112,7 +112,8 @@ For source-of-truth validation, `benchmark/prepare_datasets.py` also checks the 
 
 - `TCRvdb` labels for `GLC` / `YLQ`
 - `VDJdb` baseline table
-- `TRB` VDJdb validation sample embeddings in `/projects/immunestatus/vdjdb_validation/tcremp`
+- `TRB` VDJdb sample embeddings in `../vdjdb-motifs/results/redcea/tcremp`
+- `TRB` VDJdb AIRR tables in `../vdjdb-motifs/results/redcea/airr_format`
 - `YFV` sample/background embeddings in `/projects/immunestatus/pogorelyy/redcea/runs/yfv_*`
 - `YFV` AIRR tables in `/projects/immunestatus/pogorelyy/airr_format`
 
