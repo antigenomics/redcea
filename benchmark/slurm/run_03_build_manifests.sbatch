@@ -17,4 +17,4 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
-python benchmark/run_benchmark.py --mode manifest
+python benchmark/run_benchmark.py --mode manifest --grid-size "${BENCHMARK_GRID_SIZE:-small}"
