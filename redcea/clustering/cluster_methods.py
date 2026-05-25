@@ -36,6 +36,18 @@ class JointDbscanDebugArtifacts:
     self_index_fraction: float
 
 
+@dataclass
+class JointVdbscanDebugArtifacts:
+    labels: np.ndarray
+    eps_estimation_based_on: str
+    kth_neighbor: int
+    len_to_gid: dict[int, int]
+    sample_group_id: np.ndarray
+    background_group_id: np.ndarray
+    joint_group_id: np.ndarray
+    eps_by_gid: dict[int, float]
+
+
 # --- optional dependency: networkit ---
 try:
     import networkit as nk
@@ -511,6 +523,99 @@ def hierarchical_leiden_dbscan_clustering(
     return final_labels
 
 
+def hierarchical_vdbscan_leiden_clustering(
+    *,
+    config: PipelineConfig,
+    joint_representations: pd.DataFrame,
+    sample_representations: pd.DataFrame,
+    background_representations: pd.DataFrame,
+    knn,
+    vdbscan_labels: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    1) Joint vDBSCAN on the full sample+background graph
+    2) Leiden subclustering inside each non-noise vDBSCAN cluster
+
+    vDBSCAN defines coarse density-connected components; Leiden then refines
+    each component without discarding additional points as noise.
+    """
+    if len(joint_representations) != len(knn.indices):
+        raise ValueError(
+            "joint_representations and KNN artifacts must have the same number of rows: "
+            f"{len(joint_representations)} != {len(knn.indices)}"
+        )
+    if vdbscan_labels is None:
+        gid_all, eps_by_gid, _, _, _ = _estimate_vdbscan_group_assignments(
+            config=config,
+            joint_representations=joint_representations,
+            sample_representations=sample_representations,
+            background_representations=background_representations,
+            knn=knn,
+        )
+        eps_i_all = eps_per_point_from_group_id(gid_all, eps_by_gid)
+        vdbscan_labels = np.asarray(
+            vdbscan_from_knn(
+                knn_indices=knn.indices,
+                knn_distances_l2=knn.distances,
+                eps_i_l2=eps_i_all,
+                num_points_for_core=config.cluster_min_samples,
+                sym_rule=config.vdbscan_sym_rule,
+            )
+        )
+    else:
+        vdbscan_labels = np.asarray(vdbscan_labels)
+    if vdbscan_labels.shape != (len(joint_representations),):
+        raise ValueError(
+            "vdbscan_labels must be a 1D array aligned with joint_representations: "
+            f"expected {(len(joint_representations),)}, got {vdbscan_labels.shape}"
+        )
+    final_labels = -np.ones(len(vdbscan_labels), dtype=np.int64)
+    next_cluster_id = 0
+
+    coarse_clusters = [int(cluster_id) for cluster_id in np.unique(vdbscan_labels) if int(cluster_id) != -1]
+    logging.info(
+        "[vDBSCAN->Leiden] coarse clusters=%d, noise_points=%d",
+        len(coarse_clusters),
+        int(np.count_nonzero(vdbscan_labels == -1)),
+    )
+    for coarse_cluster_id in coarse_clusters:
+        idx = np.where(vdbscan_labels == coarse_cluster_id)[0]
+        size = int(len(idx))
+        if size <= 1:
+            final_labels[idx] = next_cluster_id
+            next_cluster_id += 1
+            continue
+
+        logging.info(
+            "[vDBSCAN->Leiden] refining coarse cluster %d (size=%d) with resolution=%.4f",
+            coarse_cluster_id,
+            size,
+            float(config.leiden_resolution),
+        )
+        sub_indices = knn.indices[idx]
+        sub_distances = knn.distances[idx]
+        mapping = {int(old): int(new) for new, old in enumerate(idx)}
+        remapped_indices = np.vectorize(lambda x: mapping.get(int(x), -1), otypes=[np.int64])(sub_indices).astype(np.int64)
+        sub_labels = run_leiden_clustering(
+            knn_indices=remapped_indices,
+            knn_distances=sub_distances,
+            resolution=config.leiden_resolution,
+            n_jobs=config.normalized_nproc,
+            min_cluster_size=None,
+        )
+        positive_subclusters = [int(subcluster) for subcluster in np.unique(sub_labels) if int(subcluster) != -1]
+        if not positive_subclusters:
+            final_labels[idx] = next_cluster_id
+            next_cluster_id += 1
+            continue
+        for subcluster in positive_subclusters:
+            mask = sub_labels == subcluster
+            final_labels[idx[mask]] = next_cluster_id
+            next_cluster_id += 1
+
+    return final_labels
+
+
 def _pick_cdr3_column(joint_representations: pd.DataFrame) -> str:
     if "cdr3aa_beta" in joint_representations.columns:
         return "cdr3aa_beta"
@@ -531,7 +636,7 @@ def _estimate_vdbscan_group_assignments(
     sample_representations: pd.DataFrame,
     background_representations: pd.DataFrame,
     knn,
-):
+) -> tuple[np.ndarray, dict[int, float], dict[int, int], np.ndarray, np.ndarray]:
     cdr3_col = _pick_cdr3_column(joint_representations)
     eps_estimation_based_on = config.eps_estimation_based_on
     kth_neighbor_for_eps = config.eps_k_neighbors
@@ -551,7 +656,7 @@ def _estimate_vdbscan_group_assignments(
             kth_neighbor=int(kth_neighbor_for_eps),
         )
         gid_all = np.concatenate([sample_gid, bg_gid]).astype(np.int32, copy=False)
-        return gid_all, eps_by_gid
+        return gid_all, eps_by_gid, len_to_gid, sample_gid, bg_gid
     if eps_estimation_based_on == "background":
         logging.info("Running vDBSCAN (eps-by-group from BACKGROUND only; L2 distances)")
         bg_len = compute_cdr3_len(background_representations[cdr3_col])
@@ -567,7 +672,7 @@ def _estimate_vdbscan_group_assignments(
             kth_neighbor=int(kth_neighbor_for_eps),
         )
         gid_all = np.concatenate([sample_gid, bg_gid]).astype(np.int32, copy=False)
-        return gid_all, eps_by_gid
+        return gid_all, eps_by_gid, len_to_gid, sample_gid, bg_gid
     if eps_estimation_based_on == "all":
         logging.info("Running vDBSCAN (eps-by-group from SAMPLE+BACKGROUND combined; L2 distances)")
         joint_len = compute_cdr3_len(joint_representations[cdr3_col])
@@ -579,11 +684,48 @@ def _estimate_vdbscan_group_assignments(
             dist_matrix=knn.distances,
             kth_neighbor=int(kth_neighbor_for_eps),
         )
-        return gid_all, eps_by_gid
+        sample_gid = gid_all[: len(sample_representations)].astype(np.int32, copy=False)
+        bg_gid = gid_all[len(sample_representations) :].astype(np.int32, copy=False)
+        return gid_all, eps_by_gid, len_to_gid, sample_gid, bg_gid
 
     raise ValueError(
         f"Unknown eps_estimation_based_on='{eps_estimation_based_on}'. "
         "Expected one of: sample, background, all"
+    )
+
+
+def run_joint_vdbscan_clustering_with_diagnostics(
+    *,
+    config: PipelineConfig,
+    joint_representations: pd.DataFrame,
+    sample_representations: pd.DataFrame,
+    background_representations: pd.DataFrame,
+    knn,
+) -> JointVdbscanDebugArtifacts:
+    gid_all, eps_by_gid, len_to_gid, sample_gid, bg_gid = _estimate_vdbscan_group_assignments(
+        config=config,
+        joint_representations=joint_representations,
+        sample_representations=sample_representations,
+        background_representations=background_representations,
+        knn=knn,
+    )
+    eps_i_all = eps_per_point_from_group_id(gid_all, eps_by_gid)
+    labels = vdbscan_from_knn(
+        knn_indices=knn.indices,
+        knn_distances_l2=knn.distances,
+        eps_i_l2=eps_i_all,
+        num_points_for_core=config.cluster_min_samples,
+        sym_rule=config.vdbscan_sym_rule,
+    )
+    return JointVdbscanDebugArtifacts(
+        labels=np.asarray(labels),
+        eps_estimation_based_on=config.eps_estimation_based_on,
+        kth_neighbor=int(config.eps_k_neighbors),
+        len_to_gid={int(length): int(gid) for length, gid in len_to_gid.items()},
+        sample_group_id=np.asarray(sample_gid, dtype=np.int32),
+        background_group_id=np.asarray(bg_gid, dtype=np.int32),
+        joint_group_id=np.asarray(gid_all, dtype=np.int32),
+        eps_by_gid={int(gid): float(eps) for gid, eps in eps_by_gid.items()},
     )
 
 
@@ -644,7 +786,7 @@ def run_joint_clustering(
             min_cluster_size_mask=sample_mask,
         )
     if config.cluster_algo == "vdbscan":
-        gid_all, eps_by_gid = _estimate_vdbscan_group_assignments(
+        gid_all, eps_by_gid, _, _, _ = _estimate_vdbscan_group_assignments(
             config=config,
             joint_representations=joint_representations,
             sample_representations=sample_representations,
@@ -659,8 +801,16 @@ def run_joint_clustering(
             num_points_for_core=config.cluster_min_samples,
             sym_rule=config.vdbscan_sym_rule,
         )
+    if config.cluster_algo == "vdbscan_leiden":
+        return hierarchical_vdbscan_leiden_clustering(
+            config=config,
+            joint_representations=joint_representations,
+            sample_representations=sample_representations,
+            background_representations=background_representations,
+            knn=knn,
+        )
 
     raise ValueError(
         f"Unknown cluster_algo='{config.cluster_algo}'. "
-        "Expected one of: dbscan, leiden_dbscan, hierarchical_leiden, leiden, vdbscan"
+        "Expected one of: dbscan, leiden_dbscan, hierarchical_leiden, leiden, vdbscan, vdbscan_leiden"
     )

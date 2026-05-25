@@ -36,6 +36,75 @@ def log_step(message: str) -> None:
     print("[{0}] {1}".format(timestamp, message), flush=True)
 
 
+def build_results_only_dataset_manifest(*, redcea_runs_dir: str | Path = "results/redcea_runs") -> pd.DataFrame:
+    redcea_runs_dir = Path(redcea_runs_dir)
+    rows: list[dict[str, object]] = []
+    seen_keys: set[tuple[str, str | None]] = set()
+    for run_dir in sorted(redcea_runs_dir.iterdir() if redcea_runs_dir.exists() else []):
+        if not run_dir.is_dir():
+            continue
+        name = run_dir.name
+        if not name.endswith(tuple(["_grid_{0:04d}".format(i) for i in range(10000)])):
+            if "_grid_" not in name:
+                continue
+        if name.startswith("yfv_"):
+            parts = name.split("_")
+            if len(parts) < 5:
+                continue
+            donor_id = "{0}_{1}".format(parts[1], parts[2])
+            key = ("yfv", donor_id)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            rows.append(
+                {
+                    "dataset": "yfv_repertoires",
+                    "dataset_mode": "yfv",
+                    "dataset_key": donor_id,
+                    "epitope": None,
+                    "donor_id": donor_id,
+                    "chain": "TRB",
+                    "species": "HomoSapiens",
+                    "sample_airr_path": "",
+                    "background_airr_path": "",
+                    "sample_embedding_path": "",
+                    "background_embedding_path": "",
+                    "sample_index_path": "",
+                    "background_index_path": "",
+                    "background_kind": "results_only_archive",
+                }
+            )
+            continue
+        if name.startswith("vdjdb_"):
+            parts = name.split("_")
+            if len(parts) < 4:
+                continue
+            dataset_key = parts[1].upper()
+            key = ("vdjdb", dataset_key)
+            if key in seen_keys or dataset_key not in VDJDB_TARGETS:
+                continue
+            seen_keys.add(key)
+            rows.append(
+                {
+                    "dataset": "vdjdb_{0}".format(dataset_key.lower()),
+                    "dataset_mode": "vdjdb",
+                    "dataset_key": dataset_key,
+                    "epitope": VDJDB_TARGETS[dataset_key]["epitope_sequence"],
+                    "donor_id": None,
+                    "chain": "TRB",
+                    "species": "HomoSapiens",
+                    "sample_airr_path": "",
+                    "background_airr_path": "",
+                    "sample_embedding_path": "",
+                    "background_embedding_path": "",
+                    "sample_index_path": "",
+                    "background_index_path": "",
+                    "background_kind": "results_only_archive",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def build_vdjdb_truth_table(
     tcrvdb_path: str | Path,
     *,
@@ -254,36 +323,41 @@ def write_processed_datasets(
     normalized_yfv_airr_dir.mkdir(parents=True, exist_ok=True)
 
     yfv_runs_dir = Path(yfv_runs_dir)
-    donor_ids = discover_yfv_donor_ids(yfv_runs_dir)
     log_step("Starting dataset preparation; processed_dir={0}".format(processed_dir))
-    log_step("Discovered YFV donors for normalization count={0} in {1}".format(len(donor_ids), yfv_runs_dir))
-    for donor_id in donor_ids:
-        log_step("Materializing normalized YFV AIRR donor={0}".format(donor_id))
-        resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
-        materialize_standardized_airr_table(
-            Path(resolved["sample_representation"]),
-            normalized_yfv_airr_dir / "{0}_sample.tsv".format(donor_id),
-        )
-        materialize_standardized_airr_table(
-            Path(resolved["background_representation"]),
-            normalized_yfv_airr_dir / "{0}_background.tsv".format(donor_id),
-        )
+    try:
+        donor_ids = discover_yfv_donor_ids(yfv_runs_dir)
+        log_step("Discovered YFV donors for normalization count={0} in {1}".format(len(donor_ids), yfv_runs_dir))
+        for donor_id in donor_ids:
+            log_step("Materializing normalized YFV AIRR donor={0}".format(donor_id))
+            resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
+            materialize_standardized_airr_table(
+                Path(resolved["sample_representation"]),
+                normalized_yfv_airr_dir / "{0}_sample.tsv".format(donor_id),
+            )
+            materialize_standardized_airr_table(
+                Path(resolved["background_representation"]),
+                normalized_yfv_airr_dir / "{0}_background.tsv".format(donor_id),
+            )
 
-    dataset_manifest = build_dataset_manifest(
-        yfv_runs_dir=yfv_runs_dir,
-        vdjdb_embed_dir=vdjdb_embed_dir,
-        vdjdb_airr_dir=vdjdb_airr_dir,
-        vdjdb_bg_airr=vdjdb_bg_airr,
-        vdjdb_bg_embedding=vdjdb_bg_embedding,
-    )
-    if len(dataset_manifest):
-        yfv_mask = dataset_manifest["dataset_mode"].eq("yfv")
-        dataset_manifest.loc[yfv_mask, "sample_airr_path"] = dataset_manifest.loc[yfv_mask, "donor_id"].map(
-            lambda donor_id: str(normalized_yfv_airr_dir / "{0}_sample.tsv".format(donor_id))
+        dataset_manifest = build_dataset_manifest(
+            yfv_runs_dir=yfv_runs_dir,
+            vdjdb_embed_dir=vdjdb_embed_dir,
+            vdjdb_airr_dir=vdjdb_airr_dir,
+            vdjdb_bg_airr=vdjdb_bg_airr,
+            vdjdb_bg_embedding=vdjdb_bg_embedding,
         )
-        dataset_manifest.loc[yfv_mask, "background_airr_path"] = dataset_manifest.loc[yfv_mask, "donor_id"].map(
-            lambda donor_id: str(normalized_yfv_airr_dir / "{0}_background.tsv".format(donor_id))
-        )
+        if len(dataset_manifest):
+            yfv_mask = dataset_manifest["dataset_mode"].eq("yfv")
+            dataset_manifest.loc[yfv_mask, "sample_airr_path"] = dataset_manifest.loc[yfv_mask, "donor_id"].map(
+                lambda donor_id: str(normalized_yfv_airr_dir / "{0}_sample.tsv".format(donor_id))
+            )
+            dataset_manifest.loc[yfv_mask, "background_airr_path"] = dataset_manifest.loc[yfv_mask, "donor_id"].map(
+                lambda donor_id: str(normalized_yfv_airr_dir / "{0}_background.tsv".format(donor_id))
+            )
+    except Exception as exc:
+        log_step("Canonical dataset preparation is unavailable locally; falling back to results-only manifest. Reason: {0}".format(exc))
+        dataset_manifest = build_results_only_dataset_manifest()
+        log_step("Built results-only dataset manifest rows={0}".format(len(dataset_manifest)))
     known_yfv = build_known_yfv_clonotypes(tcrvdb_path)
     output_paths = {
         "dataset_manifest": processed_dir / "benchmark_dataset_manifest.tsv",

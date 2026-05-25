@@ -123,7 +123,53 @@ def plot_logo(clonotypes):
     logomaker.Logo(mat_df, color_scheme="skylign_protein", ax=None)
 
 
+def plot_k_distance_panels(
+    *,
+    group_curves: dict[int, np.ndarray],
+    eps_by_gid: dict[int, float],
+    gid_to_lengths: dict[int, list[int]] | None = None,
+    title: str = "",
+):
+    """Plot one k-distance elbow panel per group."""
+    if not group_curves:
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_axis_off()
+        ax.set_title(title or "No k-distance curves available")
+        return fig
+
+    gids = sorted(group_curves)
+    n_groups = len(gids)
+    ncols = min(3, n_groups)
+    nrows = int(np.ceil(n_groups / ncols))
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 3.8 * nrows), squeeze=False)
+    axes_flat = axes.ravel()
+
+    for ax, gid in zip(axes_flat, gids):
+        distances = np.asarray(group_curves[gid], dtype=np.float64)
+        ranks = np.arange(1, distances.size + 1, dtype=np.int64)
+        ax.plot(ranks, distances, color="#2E6F95", linewidth=1.5)
+        ax.axhline(float(eps_by_gid[gid]), color="#C8553D", linestyle="--", linewidth=1.2)
+
+        lengths = sorted((gid_to_lengths or {}).get(gid, []))
+        lengths_label = ",".join(map(str, lengths)) if lengths else "?"
+        ax.set_title(f"group {gid} | len {lengths_label} | n={distances.size}")
+        ax.set_xlabel("Sorted clonotypes")
+        ax.set_ylabel("k-distance")
+        ax.grid(alpha=0.25, linewidth=0.5)
+
+    for ax in axes_flat[n_groups:]:
+        ax.set_axis_off()
+
+    if title:
+        fig.suptitle(title)
+        fig.tight_layout(rect=(0, 0, 1, 0.97))
+    else:
+        fig.tight_layout()
+    return fig
+
+
 __all__ = [
+    "plot_k_distance_panels",
     "plot_logo",
     "plot_volcano",
 ]

@@ -85,6 +85,13 @@ def build_grid_manifest(grid_size="small"):
             )
     manifest = pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
     manifest.insert(0, "grid_id", ["grid_{0:04d}".format(i) for i in range(len(manifest))])
+    log_step(
+        "Built grid manifest for grid_size={0}; methods={1}; rows={2}".format(
+            grid_size,
+            ",".join(get_enabled_methods(grid_size=grid_size)),
+            len(manifest),
+        )
+    )
     return manifest
 
 
@@ -123,7 +130,16 @@ def build_execution_manifest(processed_dir, grid_size="small"):
                 }
             )
             rows.append(row)
-    return pd.DataFrame(rows)
+    execution_manifest = pd.DataFrame(rows)
+    log_step(
+        "Built execution manifest for grid_size={0}; dataset_rows={1}; grid_rows={2}; execution_rows={3}".format(
+            grid_size,
+            len(dataset_manifest),
+            len(grid_manifest),
+            len(execution_manifest),
+        )
+    )
+    return execution_manifest
 
 
 def _sample_label_from_clone_id(clone_id: pd.Series) -> pd.Series:
@@ -306,6 +322,9 @@ def execute_single_manifest_row(
     nproc: int | None,
 ):
     run_id = str(manifest_row["run_id"])
+    dataset_mode = str(manifest_row["dataset_mode"])
+    dataset = str(manifest_row["dataset"])
+    method = str(manifest_row["method"])
     params = json.loads(manifest_row["parameter_json"])
     redcea_output_dir = Path(redcea_runs_dir) / run_id
     redcea_output_dir.mkdir(parents=True, exist_ok=True)
@@ -313,6 +332,15 @@ def execute_single_manifest_row(
     started = time.perf_counter()
     error_traceback = ""
     assignments = None
+    log_step(
+        "Starting benchmark run run_id={0} dataset_mode={1} dataset={2} method={3} params={4}".format(
+            run_id,
+            dataset_mode,
+            dataset,
+            method,
+            json.dumps(params, sort_keys=True),
+        )
+    )
     try:
         from redcea.pipeline import run_redcea_pipeline
 
@@ -321,9 +349,9 @@ def execute_single_manifest_row(
         assignments = standardize_redcea_assignments(
             artifacts.cluster_df,
             run_id=run_id,
-            dataset=str(manifest_row["dataset"]),
-            dataset_mode=str(manifest_row["dataset_mode"]),
-            method=str(manifest_row["method"]),
+            dataset=dataset,
+            dataset_mode=dataset_mode,
+            method=method,
             parameter_json=str(manifest_row["parameter_json"]),
             epitope=None if pd.isna(manifest_row.get("epitope")) else str(manifest_row.get("epitope")),
             donor_id=None if pd.isna(manifest_row.get("donor_id")) else str(manifest_row.get("donor_id")),
@@ -339,9 +367,9 @@ def execute_single_manifest_row(
     runtime_seconds = time.perf_counter() - started
     metadata = {
         "run_id": run_id,
-        "dataset": str(manifest_row["dataset"]),
-        "dataset_mode": str(manifest_row["dataset_mode"]),
-        "method": str(manifest_row["method"]),
+        "dataset": dataset,
+        "dataset_mode": dataset_mode,
+        "method": method,
         "parameter_json": str(manifest_row["parameter_json"]),
         "n_points": int(len(assignments)) if assignments is not None else 0,
         "n_clusters": int(assignments.loc[~assignments["is_noise"], "cluster_id"].nunique()) if assignments is not None else 0,
@@ -358,6 +386,24 @@ def execute_single_manifest_row(
         assignments_dir.mkdir(parents=True, exist_ok=True)
         assignments.to_parquet(assignments_dir / "{0}.parquet".format(run_id), index=False)
     _save_run_metadata(Path(metadata_parts_dir), metadata)
+    if status == "success":
+        log_step(
+            "Finished benchmark run run_id={0} status=success runtime_seconds={1:.2f} n_points={2} n_clusters={3} n_noise={4}".format(
+                run_id,
+                runtime_seconds,
+                metadata["n_points"],
+                metadata["n_clusters"],
+                metadata["n_noise"],
+            )
+        )
+    else:
+        log_step(
+            "Finished benchmark run run_id={0} status=error runtime_seconds={1:.2f} error={2}".format(
+                run_id,
+                runtime_seconds,
+                error_message,
+            )
+        )
     return metadata
 
 

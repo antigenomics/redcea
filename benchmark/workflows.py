@@ -187,6 +187,14 @@ def compute_density_by_length(
 
     rows: list[dict[str, object]] = []
 
+    def _safe_manifest_path(row_value) -> Path | None:
+        if pd.isna(row_value):
+            return None
+        value = str(row_value).strip()
+        if not value:
+            return None
+        return Path(value)
+
     def read_parquet_metadata_only(path: Path) -> tuple[pd.DataFrame, int]:
         try:
             import pyarrow.parquet as pq
@@ -372,6 +380,23 @@ def compute_density_by_length(
     for row in dataset_manifest.itertuples(index=False):
         dataset_mode = str(row.dataset_mode)
         dataset_label = str(row.dataset)
+        sample_embedding_path = _safe_manifest_path(getattr(row, "sample_embedding_path", None))
+        background_embedding_path = _safe_manifest_path(getattr(row, "background_embedding_path", None))
+        sample_index_path = _safe_manifest_path(getattr(row, "sample_index_path", None))
+        background_index_path = _safe_manifest_path(getattr(row, "background_index_path", None))
+        sample_airr_path = _safe_manifest_path(getattr(row, "sample_airr_path", None))
+        background_airr_path = _safe_manifest_path(getattr(row, "background_airr_path", None))
+        required_paths = [
+            sample_embedding_path,
+            background_embedding_path,
+            sample_index_path,
+            background_index_path,
+            sample_airr_path,
+            background_airr_path,
+        ]
+        if any(path is None or not path.exists() for path in required_paths):
+            log_step("Skipping density dataset {0}: required embedding/index/AIRR inputs are unavailable locally".format(dataset_label))
+            continue
         if dataset_mode == "vdjdb":
             epitope_label = str(row.epitope)
             process_facet(
@@ -379,20 +404,20 @@ def compute_density_by_length(
                 yfv_cdr3_lengths_from_metadata(
                     donor_id=dataset_label,
                     sample_label="sample",
-                    embedding_path=Path(row.sample_embedding_path),
-                    airr_path=Path(row.sample_airr_path),
+                    embedding_path=sample_embedding_path,
+                    airr_path=sample_airr_path,
                 ),
-                Path(row.sample_index_path),
+                sample_index_path,
             )
             process_facet(
                 f"VDJdb / {epitope_label} / background",
                 yfv_cdr3_lengths_from_metadata(
                     donor_id=dataset_label,
                     sample_label="background",
-                    embedding_path=Path(row.background_embedding_path),
-                    airr_path=Path(row.background_airr_path),
+                    embedding_path=background_embedding_path,
+                    airr_path=background_airr_path,
                 ),
-                Path(row.background_index_path),
+                background_index_path,
             )
             continue
 
@@ -402,20 +427,20 @@ def compute_density_by_length(
             yfv_cdr3_lengths_from_metadata(
                 donor_id=donor_id,
                 sample_label="sample",
-                embedding_path=Path(row.sample_embedding_path),
-                airr_path=Path(row.sample_airr_path),
+                embedding_path=sample_embedding_path,
+                airr_path=sample_airr_path,
             ),
-            Path(row.sample_index_path),
+            sample_index_path,
         )
         process_facet(
             f"YFV / {donor_id} / background",
             yfv_cdr3_lengths_from_metadata(
                 donor_id=donor_id,
                 sample_label="background",
-                embedding_path=Path(row.background_embedding_path),
-                airr_path=Path(row.background_airr_path),
+                embedding_path=background_embedding_path,
+                airr_path=background_airr_path,
             ),
-            Path(row.background_index_path),
+            background_index_path,
         )
     density_df = pd.DataFrame(rows)
     log_step("Computed density table rows={0}".format(len(density_df)))

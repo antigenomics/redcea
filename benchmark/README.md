@@ -15,6 +15,7 @@ The methods under comparison are:
 
 - `dbscan`
 - `vdbscan`
+- `vdbscan_leiden`
 - `leiden`
 - `leiden_dbscan`
 - `hierarchical_leiden`
@@ -23,6 +24,7 @@ The initial priority batch is:
 
 - `dbscan`
 - `vdbscan`
+- `vdbscan_leiden`
 - `leiden`
 
 ## Datasets

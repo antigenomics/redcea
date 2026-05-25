@@ -44,6 +44,7 @@ from .cluster_methods import (
     run_joint_clustering,
     hierarchical_leiden_clustering,
     hierarchical_leiden_dbscan_clustering,
+    hierarchical_vdbscan_leiden_clustering,
 )
 
 __all__ = [
@@ -84,4 +85,5 @@ __all__ = [
     "run_joint_clustering",
     "hierarchical_leiden_clustering",
     "hierarchical_leiden_dbscan_clustering",
+    "hierarchical_vdbscan_leiden_clustering",
 ]

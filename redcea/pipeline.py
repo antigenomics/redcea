@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import faiss
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from mir.common.segments import SegmentLibrary
@@ -19,7 +20,13 @@ from redcea.analysis.io import (
     save_pipeline_outputs,
 )
 from redcea.clustering import build_joint_knn_artifacts, run_joint_clustering
-from redcea.clustering.cluster_methods import JointDbscanDebugArtifacts, run_joint_dbscan_clustering_with_diagnostics
+from redcea.clustering.cluster_methods import (
+    JointDbscanDebugArtifacts,
+    JointVdbscanDebugArtifacts,
+    run_joint_dbscan_clustering_with_diagnostics,
+    hierarchical_vdbscan_leiden_clustering,
+    run_joint_vdbscan_clustering_with_diagnostics,
+)
 from redcea.config import PipelineConfig, normalize_pipeline_config
 from redcea.debug import (
     build_cluster_membership_frame,
@@ -30,6 +37,7 @@ from redcea.debug import (
     save_tsv,
     summarize_distribution,
 )
+from redcea.plotting.cluster_plots import plot_k_distance_panels
 from redcea.embeddings import compute_embeddings_if_needed
 from redcea.utils.paths import resolve_prototype_file
 from redcea.utils.stats import add_binom_pvalues, add_fisher_pvalues, add_log_fold_change, add_z_binom_pvalues
@@ -60,6 +68,7 @@ class ClusteringOutputs:
     labels: np.ndarray
     knn: object
     dbscan_debug: JointDbscanDebugArtifacts | None = None
+    vdbscan_debug: JointVdbscanDebugArtifacts | None = None
 
 
 def _add_enrichment_pvalues(
@@ -119,7 +128,17 @@ def compute_cluster_labels(
     bg_index_path,
     output_path,
 )-> ClusteringOutputs:
-    logging.info("Running clustering...")
+    logging.info(
+        "Running clustering: algo=%s min_samples=%d k_neighbors=%d eps_k_neighbors=%d leiden_resolution=%.4f leiden_sub_resolution=%.4f eps_estimation_based_on=%s vdbscan_sym_rule=%s",
+        config.cluster_algo,
+        config.cluster_min_samples,
+        config.k_neighbors,
+        config.eps_k_neighbors,
+        float(config.leiden_resolution),
+        float(config.leiden_sub_resolution),
+        config.eps_estimation_based_on,
+        config.vdbscan_sym_rule,
+    )
     knn = build_joint_knn_artifacts(
         config=config,
         sample_embeddings=sample_embeddings,
@@ -132,6 +151,32 @@ def compute_cluster_labels(
     if config.cluster_algo == "dbscan":
         dbscan_debug = run_joint_dbscan_clustering_with_diagnostics(config=config, knn=knn)
         return ClusteringOutputs(labels=dbscan_debug.labels, knn=knn, dbscan_debug=dbscan_debug)
+    if config.cluster_algo == "vdbscan":
+        vdbscan_debug = run_joint_vdbscan_clustering_with_diagnostics(
+            config=config,
+            joint_representations=joint_representations,
+            sample_representations=sample_representations,
+            background_representations=background_representations,
+            knn=knn,
+        )
+        return ClusteringOutputs(labels=vdbscan_debug.labels, knn=knn, vdbscan_debug=vdbscan_debug)
+    if config.cluster_algo == "vdbscan_leiden":
+        vdbscan_debug = run_joint_vdbscan_clustering_with_diagnostics(
+            config=config,
+            joint_representations=joint_representations,
+            sample_representations=sample_representations,
+            background_representations=background_representations,
+            knn=knn,
+        )
+        labels = hierarchical_vdbscan_leiden_clustering(
+            config=config,
+            joint_representations=joint_representations,
+            sample_representations=sample_representations,
+            background_representations=background_representations,
+            knn=knn,
+            vdbscan_labels=vdbscan_debug.labels,
+        )
+        return ClusteringOutputs(labels=np.asarray(labels), knn=knn, vdbscan_debug=vdbscan_debug)
 
     labels = run_joint_clustering(
         config=config,
@@ -338,6 +383,7 @@ def _save_debug_outputs(
     save_numpy(debug_dir / "05_knn_indices.npy", np.asarray(clustering_outputs.knn.indices))
 
     dbscan_debug = clustering_outputs.dbscan_debug
+    vdbscan_debug = clustering_outputs.vdbscan_debug
     if dbscan_debug is not None:
         eps_stats = summarize_distribution(dbscan_debug.eps_distances)
         eps_frame = pd.DataFrame(
@@ -374,6 +420,94 @@ def _save_debug_outputs(
             "d1_column": int(dbscan_debug.d1_column),
             "n_prefilter_removed": int(np.count_nonzero(~dbscan_debug.keep_mask)),
             "prefilter_removed_fraction": float(np.mean(~dbscan_debug.keep_mask)),
+            "dbscan_min_samples": int(config.cluster_min_samples),
+            "dbscan_n_clusters": int(len(set(clustering_outputs.labels)) - (1 if -1 in clustering_outputs.labels else 0)),
+            "dbscan_n_noise": int(np.count_nonzero(np.asarray(clustering_outputs.labels) == -1)),
+            "enrichment_test": config.enrichment_test,
+            "n_enriched_clusters": int(artifacts.summary_df.loc[
+                (artifacts.summary_df[fdr_col] < 0.05) & (artifacts.summary_df["log_fold_change"] > 0)
+            ].shape[0]),
+            "n_enriched_clonotypes": int(len(artifacts.enriched_clonotypes_df)),
+        }
+        save_json(debug_dir / "debug_summary.json", debug_summary)
+    elif vdbscan_debug is not None:
+        gid_to_lengths: dict[int, list[int]] = {}
+        for length, gid in vdbscan_debug.len_to_gid.items():
+            gid_to_lengths.setdefault(int(gid), []).append(int(length))
+
+        if vdbscan_debug.eps_estimation_based_on == "sample":
+            estimation_group_id = np.asarray(vdbscan_debug.sample_group_id, dtype=np.int32)
+            estimation_distances = np.asarray(clustering_outputs.knn.dist_ss)
+        elif vdbscan_debug.eps_estimation_based_on == "background":
+            estimation_group_id = np.asarray(vdbscan_debug.background_group_id, dtype=np.int32)
+            estimation_distances = np.asarray(clustering_outputs.knn.dist_bb)
+        else:
+            estimation_group_id = np.asarray(vdbscan_debug.joint_group_id, dtype=np.int32)
+            estimation_distances = np.asarray(clustering_outputs.knn.distances)
+
+        kth_col = int(vdbscan_debug.kth_neighbor) - 1
+        if kth_col < 0 or kth_col >= estimation_distances.shape[1]:
+            raise ValueError(
+                f"Cannot save vDBSCAN eps diagnostics: kth neighbor column {kth_col} "
+                f"is out of bounds for distances with shape {estimation_distances.shape}"
+            )
+
+        group_frames = []
+        group_curves: dict[int, np.ndarray] = {}
+        for gid in sorted(vdbscan_debug.eps_by_gid):
+            gid_mask = estimation_group_id == int(gid)
+            kth_distances = np.asarray(estimation_distances[gid_mask, kth_col], dtype=np.float64)
+            kth_sorted = np.sort(kth_distances)
+            group_curves[int(gid)] = kth_sorted
+            group_frames.append(
+                pd.DataFrame(
+                    {
+                        "group_id": int(gid),
+                        "curve_rank": np.arange(1, kth_sorted.size + 1, dtype=np.int64),
+                        "kth_distance": kth_sorted,
+                        "eps": float(vdbscan_debug.eps_by_gid[int(gid)]),
+                        "eps_k_neighbors": int(vdbscan_debug.kth_neighbor),
+                    }
+                )
+            )
+
+        eps_group_frame = pd.DataFrame(
+            [
+                {
+                    "group_id": int(gid),
+                    "cdr3_lengths": ",".join(map(str, sorted(gid_to_lengths.get(int(gid), [])))),
+                    "n_points_used_for_eps": int(group_curves[int(gid)].size),
+                    "eps": float(vdbscan_debug.eps_by_gid[int(gid)]),
+                    **summarize_distribution(group_curves[int(gid)]),
+                }
+                for gid in sorted(vdbscan_debug.eps_by_gid)
+            ]
+        )
+        save_tsv(debug_dir / "06_vdbscan_eps_by_group.tsv", eps_group_frame)
+
+        if group_frames:
+            save_tsv(debug_dir / "07_vdbscan_kdistance_values.tsv", pd.concat(group_frames, ignore_index=True))
+
+        fig = plot_k_distance_panels(
+            group_curves=group_curves,
+            eps_by_gid=vdbscan_debug.eps_by_gid,
+            gid_to_lengths=gid_to_lengths,
+            title=(
+                f"vDBSCAN k-distance curves "
+                f"({vdbscan_debug.eps_estimation_based_on}, k={vdbscan_debug.kth_neighbor})"
+            ),
+        )
+        fig.savefig(debug_dir / "08_vdbscan_kdistance_panels.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        debug_summary = {
+            "n_input": int(len(input_order)),
+            "n_after_pca": int(clustering_outputs.knn.data_reduced.shape[0]),
+            "n_knn": int(clustering_outputs.knn.indices.shape[0]),
+            "cluster_algo": config.cluster_algo,
+            "eps_estimation_based_on": vdbscan_debug.eps_estimation_based_on,
+            "eps_k_neighbors": int(vdbscan_debug.kth_neighbor),
+            "n_groups": int(len(vdbscan_debug.eps_by_gid)),
             "dbscan_min_samples": int(config.cluster_min_samples),
             "dbscan_n_clusters": int(len(set(clustering_outputs.labels)) - (1 if -1 in clustering_outputs.labels else 0)),
             "dbscan_n_noise": int(np.count_nonzero(np.asarray(clustering_outputs.labels) == -1)),

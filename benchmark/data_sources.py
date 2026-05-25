@@ -112,4 +112,10 @@ def resolve_vdjdb_rep_path(target_key, airr_dir=DEFAULT_VDJDB_AIRR_DIR):
 
 
 def resolve_tcrvdb_path(path=DEFAULT_TCRVDB_PATH):
-    return Path(path).expanduser()
+    resolved = Path(path).expanduser()
+    if resolved.exists():
+        return resolved
+    repo_local = REPO_ROOT / "data" / resolved.name
+    if repo_local.exists():
+        return repo_local
+    return resolved

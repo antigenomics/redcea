@@ -69,6 +69,17 @@ def read_airr_like_table(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, sep="\t", low_memory=False)
 
 
+def split_embedding_metadata(frame: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
+    embedding_columns = [column for column in frame.columns if str(column).startswith("emb_")]
+    if not embedding_columns:
+        numeric_columns = frame.select_dtypes(include=[np.number]).columns.tolist()
+        embedding_columns = [column for column in numeric_columns if str(column) not in {"clone_id"}]
+    metadata_columns = [column for column in frame.columns if column not in embedding_columns]
+    metadata = frame[metadata_columns].copy()
+    embeddings = frame[embedding_columns].to_numpy(dtype=np.float32, copy=False) if embedding_columns else np.empty((len(frame), 0), dtype=np.float32)
+    return metadata, embeddings
+
+
 def to_tcremp_airr_frame(frame: pd.DataFrame, *, chain_default: str = "TRB") -> pd.DataFrame:
     out = pd.DataFrame(index=frame.index)
     if "clone_id" in frame.columns:
