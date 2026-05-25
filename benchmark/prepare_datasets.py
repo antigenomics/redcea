@@ -11,7 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from benchmark.airr_utils import normalize_segment, read_airr_like_table
+from benchmark.airr_utils import normalize_segment, read_airr_like_table, standardize_metadata_frame, to_tcremp_airr_frame
 from benchmark.data_sources import (
     DEFAULT_TCRVDB_PADJ_THRESHOLD,
     DEFAULT_TCRVDB_PATH,
@@ -94,17 +94,10 @@ def build_known_yfv_clonotypes(
 
 def validate_tcremp_airr_columns(airr_path: Path) -> None:
     frame = read_airr_like_table(airr_path)
+    standardized = to_tcremp_airr_frame(frame, chain_default="TRB")
     required_columns = ["junction_aa", "v_call", "j_call", "locus"]
-    missing = [column for column in required_columns if column not in frame.columns]
-    if missing:
-        raise KeyError(
-            "Expected tcremp-format AIRR columns are missing in {0}: {1}".format(
-                airr_path,
-                ", ".join(missing),
-            )
-        )
     for column in required_columns:
-        normalized = frame[column].fillna("").astype(str).str.strip()
+        normalized = standardized[column].fillna("").astype(str).str.strip()
         if normalized.eq("").any():
             raise ValueError(
                 "Expected non-empty tcremp column {0} in {1}, but found empty rows={2}".format(
@@ -113,6 +106,20 @@ def validate_tcremp_airr_columns(airr_path: Path) -> None:
                     int(normalized.eq("").sum()),
                 )
             )
+    standardize_metadata_frame(standardized, chain_default="TRB")
+
+
+def materialize_standardized_airr_table(
+    source_path: Path,
+    output_path: Path,
+    *,
+    chain_default: str = "TRB",
+) -> Path:
+    frame = read_airr_like_table(source_path)
+    standardized = to_tcremp_airr_frame(frame, chain_default=chain_default)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    standardized.to_csv(output_path, sep="\t", index=False)
+    return output_path
 
 
 def validate_embedding_airr_pair(airr_path: Path, embedding_path: Path) -> int:
@@ -213,6 +220,21 @@ def write_processed_datasets(
 ) -> dict[str, Path]:
     processed_dir = Path(processed_dir)
     processed_dir.mkdir(parents=True, exist_ok=True)
+    normalized_yfv_airr_dir = processed_dir / "yfv_airr"
+    normalized_yfv_airr_dir.mkdir(parents=True, exist_ok=True)
+
+    yfv_runs_dir = Path(yfv_runs_dir)
+    for donor_id in discover_yfv_donor_ids(yfv_runs_dir):
+        resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
+        materialize_standardized_airr_table(
+            Path(resolved["sample_representation"]),
+            normalized_yfv_airr_dir / "{0}_sample.tsv".format(donor_id),
+        )
+        materialize_standardized_airr_table(
+            Path(resolved["background_representation"]),
+            normalized_yfv_airr_dir / "{0}_background.tsv".format(donor_id),
+        )
+
     dataset_manifest = build_dataset_manifest(
         yfv_runs_dir=yfv_runs_dir,
         vdjdb_embed_dir=vdjdb_embed_dir,
@@ -220,6 +242,14 @@ def write_processed_datasets(
         vdjdb_bg_airr=vdjdb_bg_airr,
         vdjdb_bg_embedding=vdjdb_bg_embedding,
     )
+    if len(dataset_manifest):
+        yfv_mask = dataset_manifest["dataset_mode"].eq("yfv")
+        dataset_manifest.loc[yfv_mask, "sample_airr_path"] = dataset_manifest.loc[yfv_mask, "donor_id"].map(
+            lambda donor_id: str(normalized_yfv_airr_dir / "{0}_sample.tsv".format(donor_id))
+        )
+        dataset_manifest.loc[yfv_mask, "background_airr_path"] = dataset_manifest.loc[yfv_mask, "donor_id"].map(
+            lambda donor_id: str(normalized_yfv_airr_dir / "{0}_background.tsv".format(donor_id))
+        )
     known_yfv = build_known_yfv_clonotypes(tcrvdb_path)
     output_paths = {
         "dataset_manifest": processed_dir / "benchmark_dataset_manifest.tsv",

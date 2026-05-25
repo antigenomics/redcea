@@ -52,6 +52,13 @@ def infer_chain(frame: pd.DataFrame, default: str = "TRB") -> pd.Series:
     if "locus" in frame.columns:
         locus = frame["locus"].fillna(default).astype(str)
         return locus.replace({"beta": "TRB", "alpha": "TRA"})
+    trb_markers = {"cdr3aa_TRB", "v_TRB", "j_TRB", "TRBV", "TRBJ", "cdr3_beta_aa"}
+    tra_markers = {"cdr3aa_TRA", "v_TRA", "j_TRA", "TRAV", "TRAJ", "cdr3_alpha_aa"}
+    frame_columns = set(map(str, frame.columns))
+    if frame_columns & trb_markers:
+        return pd.Series(["TRB"] * len(frame), index=frame.index, dtype="object")
+    if frame_columns & tra_markers:
+        return pd.Series(["TRA"] * len(frame), index=frame.index, dtype="object")
     return pd.Series([default] * len(frame), index=frame.index, dtype="object")
 
 
@@ -62,12 +69,99 @@ def read_airr_like_table(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, sep="\t", low_memory=False)
 
 
+def to_tcremp_airr_frame(frame: pd.DataFrame, *, chain_default: str = "TRB") -> pd.DataFrame:
+    out = pd.DataFrame(index=frame.index)
+    if "clone_id" in frame.columns:
+        out["clone_id"] = frame["clone_id"].astype(str)
+    elif "clonotype_id" in frame.columns:
+        out["clone_id"] = frame["clonotype_id"].astype(str)
+    else:
+        out["clone_id"] = pd.Series(np.arange(len(frame)), index=frame.index).astype(str)
+
+    out["junction_aa"] = ensure_nonempty_series(
+        required_present(
+            frame,
+            [
+                "junction_aa",
+                "cdr3",
+                "cdr3aa",
+                "cdr3aa_TRB",
+                "cdr3aa_TRA",
+                "cdr3aa_beta",
+                "cdr3aa_alpha",
+                "cdr3_beta_aa",
+                "cdr3_alpha_aa",
+            ],
+            "junction_aa",
+        ),
+        label="metadata frame",
+        source_label="junction_aa",
+    ).astype(str)
+    out["v_call"] = ensure_nonempty_series(
+        required_present(
+            frame,
+            [
+                "v_call",
+                "v_gene",
+                "v.segm",
+                "v_TRB",
+                "v_TRA",
+                "v_beta",
+                "v_alpha",
+                "TRBV",
+                "TRAV",
+                "TRBV_IMGT",
+                "TRAV_IMGT",
+                "v",
+            ],
+            "v_call",
+        ),
+        label="metadata frame",
+        source_label="v_call",
+    ).astype(str)
+    out["j_call"] = ensure_nonempty_series(
+        required_present(
+            frame,
+            [
+                "j_call",
+                "j_gene",
+                "j.segm",
+                "j_TRB",
+                "j_TRA",
+                "j_beta",
+                "j_alpha",
+                "TRBJ",
+                "TRAJ",
+                "TRBJ_IMGT",
+                "TRAJ_IMGT",
+                "j",
+            ],
+            "j_call",
+        ),
+        label="metadata frame",
+        source_label="j_call",
+    ).astype(str)
+    inferred_chain = infer_chain(frame, default=chain_default).astype(str)
+    out["locus"] = inferred_chain.replace({"TRB": "beta", "TRA": "alpha"})
+    return out
+
+
 def standardize_metadata_frame(frame: pd.DataFrame, *, chain_default: str = "TRB") -> pd.DataFrame:
     out = pd.DataFrame(index=frame.index)
     out["cdr3"] = ensure_nonempty_series(
         required_present(
             frame,
-            ["cdr3", "cdr3aa", "junction_aa", "cdr3aa_beta", "cdr3aa_alpha", "cdr3_beta_aa", "cdr3_alpha_aa"],
+            [
+                "cdr3",
+                "cdr3aa",
+                "junction_aa",
+                "cdr3aa_TRB",
+                "cdr3aa_TRA",
+                "cdr3aa_beta",
+                "cdr3aa_alpha",
+                "cdr3_beta_aa",
+                "cdr3_alpha_aa",
+            ],
             "cdr3",
         ),
         label="metadata frame",
@@ -77,7 +171,7 @@ def standardize_metadata_frame(frame: pd.DataFrame, *, chain_default: str = "TRB
         normalize_segment(
             required_present(
                 frame,
-                ["v_gene", "v_call", "v.segm", "v_beta", "v_alpha", "TRBV", "TRAV", "TRBV_IMGT", "v"],
+                ["v_gene", "v_call", "v.segm", "v_TRB", "v_TRA", "v_beta", "v_alpha", "TRBV", "TRAV", "TRBV_IMGT", "TRAV_IMGT", "v"],
                 "v_gene",
             )
         ),
@@ -88,7 +182,7 @@ def standardize_metadata_frame(frame: pd.DataFrame, *, chain_default: str = "TRB
         normalize_segment(
             required_present(
                 frame,
-                ["j_gene", "j_call", "j.segm", "j_beta", "j_alpha", "TRBJ", "TRAJ", "TRBJ_IMGT", "j"],
+                ["j_gene", "j_call", "j.segm", "j_TRB", "j_TRA", "j_beta", "j_alpha", "TRBJ", "TRAJ", "TRBJ_IMGT", "TRAJ_IMGT", "j"],
                 "j_gene",
             )
         ),
