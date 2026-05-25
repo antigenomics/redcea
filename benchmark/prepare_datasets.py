@@ -19,7 +19,6 @@ from benchmark.data_sources import (
     DEFAULT_VDJDB_BG_SOURCE_AIRR,
     DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
     DEFAULT_VDJDB_EMBED_DIR,
-    DEFAULT_YFV_AIRR_DIR,
     DEFAULT_YFV_KNOWN_EPITOPES,
     DEFAULT_YFV_RUNS_DIR,
     VDJDB_TARGETS,
@@ -141,7 +140,6 @@ def validate_embedding_airr_pair(airr_path: Path, embedding_path: Path) -> int:
 def build_dataset_manifest(
     *,
     yfv_runs_dir: str | Path = DEFAULT_YFV_RUNS_DIR,
-    yfv_airr_dir: str | Path = DEFAULT_YFV_AIRR_DIR,
     vdjdb_embed_dir: str | Path = DEFAULT_VDJDB_EMBED_DIR,
     vdjdb_airr_dir: str | Path = DEFAULT_VDJDB_AIRR_DIR,
     vdjdb_bg_airr: str | Path = DEFAULT_VDJDB_BG_SOURCE_AIRR,
@@ -177,9 +175,8 @@ def build_dataset_manifest(
 
     for donor_id in discover_yfv_donor_ids(yfv_runs_dir):
         resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
-        subject, replicate = donor_id.split("_", 1)
-        sample_airr = Path(yfv_airr_dir) / f"{subject}_15_{replicate}.txt"
-        background_airr = Path(yfv_airr_dir) / f"{subject}_0_{replicate}_with_1.txt"
+        sample_airr = Path(resolved["sample_representation"])
+        background_airr = Path(resolved["background_representation"])
         validate_embedding_airr_pair(sample_airr, resolved["sample_embedding"])
         validate_embedding_airr_pair(background_airr, resolved["background_embedding"])
         rows.append(
@@ -208,7 +205,6 @@ def write_processed_datasets(
     *,
     processed_dir: str | Path = "data/processed",
     yfv_runs_dir: str | Path = DEFAULT_YFV_RUNS_DIR,
-    yfv_airr_dir: str | Path = DEFAULT_YFV_AIRR_DIR,
     vdjdb_embed_dir: str | Path = DEFAULT_VDJDB_EMBED_DIR,
     vdjdb_airr_dir: str | Path = DEFAULT_VDJDB_AIRR_DIR,
     vdjdb_bg_airr: str | Path = DEFAULT_VDJDB_BG_SOURCE_AIRR,
@@ -219,7 +215,6 @@ def write_processed_datasets(
     processed_dir.mkdir(parents=True, exist_ok=True)
     dataset_manifest = build_dataset_manifest(
         yfv_runs_dir=yfv_runs_dir,
-        yfv_airr_dir=yfv_airr_dir,
         vdjdb_embed_dir=vdjdb_embed_dir,
         vdjdb_airr_dir=vdjdb_airr_dir,
         vdjdb_bg_airr=vdjdb_bg_airr,
@@ -238,7 +233,6 @@ def write_processed_datasets(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build the benchmark dataset manifest.")
     parser.add_argument("--yfv-runs-dir", default=str(DEFAULT_YFV_RUNS_DIR))
-    parser.add_argument("--yfv-airr-dir", default=str(DEFAULT_YFV_AIRR_DIR))
     parser.add_argument("--vdjdb-embed-dir", default=str(DEFAULT_VDJDB_EMBED_DIR))
     parser.add_argument("--vdjdb-airr-dir", default=str(DEFAULT_VDJDB_AIRR_DIR))
     parser.add_argument("--vdjdb-bg-airr", default=str(DEFAULT_VDJDB_BG_SOURCE_AIRR))
@@ -253,7 +247,6 @@ def main() -> int:
     output_paths = write_processed_datasets(
         processed_dir=args.processed_dir,
         yfv_runs_dir=args.yfv_runs_dir,
-        yfv_airr_dir=args.yfv_airr_dir,
         vdjdb_embed_dir=args.vdjdb_embed_dir,
         vdjdb_airr_dir=args.vdjdb_airr_dir,
         vdjdb_bg_airr=args.vdjdb_bg_airr,

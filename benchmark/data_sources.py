@@ -8,8 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SIBLING_PROJECTS_ROOT = REPO_ROOT.parent
 DEFAULT_VDJDB_MOTIFS_DIR = SIBLING_PROJECTS_ROOT / "vdjdb-motifs"
 DEFAULT_VDJDB_MOTIFS_RESULTS_DIR = DEFAULT_VDJDB_MOTIFS_DIR / "results" / "redcea"
-DEFAULT_YFV_RUNS_DIR = Path("/projects/immunestatus/pogorelyy/redcea/runs")
-DEFAULT_YFV_AIRR_DIR = Path("/projects/immunestatus/pogorelyy/airr_format")
+DEFAULT_YFV_RUNS_DIR = Path("/projects/immunestatus/pogorelyy/tcremp")
 DEFAULT_VDJDB_EMBED_DIR = DEFAULT_VDJDB_MOTIFS_RESULTS_DIR / "tcremp"
 DEFAULT_VDJDB_AIRR_DIR = DEFAULT_VDJDB_MOTIFS_RESULTS_DIR / "airr_format"
 DEFAULT_TCRVDB_PATH = Path.home() / "01_05_2025_TCRvdb.csv"
@@ -35,53 +34,65 @@ VDJDB_TARGETS = {
     },
 }
 
-
-def yfv_run_dir_name(donor_id):
-    return "yfv_{0}".format(donor_id)
+def _split_yfv_donor_id(donor_id):
+    subject, replicate = donor_id.split("_", 1)
+    return subject, replicate
 
 
 def yfv_sample_embedding_name(donor_id):
-    return "yfv_{0}_sample_embeddings.parquet".format(donor_id)
+    subject, replicate = _split_yfv_donor_id(donor_id)
+    return "{0}_15_{1}_tcremp.parquet".format(subject, replicate)
 
 
 def yfv_background_embedding_name(donor_id):
-    return "yfv_{0}_background_embeddings.parquet".format(donor_id)
+    subject, replicate = _split_yfv_donor_id(donor_id)
+    return "{0}_0_{1}_with_1_tcremp.parquet".format(subject, replicate)
 
 
-def yfv_sample_index_name(donor_id):
-    return "yfv_{0}_sample_embeddings.index".format(donor_id)
+def yfv_sample_representation_name(donor_id):
+    subject, replicate = _split_yfv_donor_id(donor_id)
+    return "{0}_15_{1}_tcremp_representations.tsv".format(subject, replicate)
 
 
-def yfv_background_index_name(donor_id):
-    return "yfv_{0}_background_embeddings.index".format(donor_id)
+def yfv_background_representation_name(donor_id):
+    subject, replicate = _split_yfv_donor_id(donor_id)
+    return "{0}_0_{1}_with_1_tcremp_representations.tsv".format(subject, replicate)
 
 
 def resolve_yfv_embedding_paths(donor_id, runs_dir=DEFAULT_YFV_RUNS_DIR):
-    run_dir = Path(runs_dir) / yfv_run_dir_name(donor_id)
+    runs_dir = Path(runs_dir)
+    sample_embedding = runs_dir / yfv_sample_embedding_name(donor_id)
+    background_embedding = runs_dir / yfv_background_embedding_name(donor_id)
     return {
-        "run_dir": run_dir,
-        "sample_embedding": run_dir / yfv_sample_embedding_name(donor_id),
-        "background_embedding": run_dir / yfv_background_embedding_name(donor_id),
-        "sample_index": run_dir / yfv_sample_index_name(donor_id),
-        "background_index": run_dir / yfv_background_index_name(donor_id),
+        "run_dir": runs_dir,
+        "sample_embedding": sample_embedding,
+        "background_embedding": background_embedding,
+        "sample_index": sample_embedding.with_suffix(".index"),
+        "background_index": background_embedding.with_suffix(".index"),
+        "sample_representation": runs_dir / yfv_sample_representation_name(donor_id),
+        "background_representation": runs_dir / yfv_background_representation_name(donor_id),
     }
 
 
 def discover_yfv_donor_ids(runs_dir=DEFAULT_YFV_RUNS_DIR):
     runs_dir = Path(runs_dir)
-    donor_ids = []
     if not runs_dir.exists():
-        return donor_ids
-    for path in sorted(runs_dir.iterdir()):
-        if not path.is_dir() or not path.name.startswith("yfv_"):
+        return []
+    flat_samples = set()
+    flat_backgrounds = set()
+    sample_pattern = re.compile(r"(?P<subject>[A-Z][0-9]+)_15_(?P<replicate>F[0-9]+)_tcremp\.parquet$")
+    background_pattern = re.compile(r"(?P<subject>[A-Z][0-9]+)_0_(?P<replicate>F[0-9]+)_with_1_tcremp\.parquet$")
+    for path in sorted(runs_dir.glob("*.parquet")):
+        sample_match = sample_pattern.fullmatch(path.name)
+        if sample_match is not None:
+            donor_id = "{0}_{1}".format(sample_match.group("subject"), sample_match.group("replicate"))
+            flat_samples.add(donor_id)
             continue
-        donor_id = path.name.replace("yfv_", "", 1)
-        if not re.fullmatch(r"[A-Z][0-9]+_F[0-9]+", donor_id):
-            continue
-        resolved = resolve_yfv_embedding_paths(donor_id, runs_dir)
-        if resolved["sample_embedding"].exists() and resolved["background_embedding"].exists():
-            donor_ids.append(donor_id)
-    return donor_ids
+        background_match = background_pattern.fullmatch(path.name)
+        if background_match is not None:
+            donor_id = "{0}_{1}".format(background_match.group("subject"), background_match.group("replicate"))
+            flat_backgrounds.add(donor_id)
+    return sorted(flat_samples & flat_backgrounds)
 
 
 def resolve_vdjdb_embedding_path(target_key, embed_dir=DEFAULT_VDJDB_EMBED_DIR):
