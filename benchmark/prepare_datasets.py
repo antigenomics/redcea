@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +29,11 @@ from benchmark.data_sources import (
     resolve_vdjdb_rep_path,
     resolve_yfv_embedding_paths,
 )
+
+
+def log_step(message: str) -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print("[{0}] {1}".format(timestamp, message), flush=True)
 
 
 def build_vdjdb_truth_table(
@@ -109,16 +115,33 @@ def validate_tcremp_airr_columns(airr_path: Path) -> None:
     standardize_metadata_frame(standardized, chain_default="TRB")
 
 
+def parquet_row_count(path: Path) -> int:
+    try:
+        import pyarrow.parquet as pq
+    except Exception as exc:
+        raise RuntimeError("pyarrow is required to read parquet row counts efficiently") from exc
+    return int(pq.ParquetFile(path).metadata.num_rows)
+
+
 def materialize_standardized_airr_table(
     source_path: Path,
     output_path: Path,
     *,
     chain_default: str = "TRB",
 ) -> Path:
+    if output_path.exists():
+        try:
+            if output_path.stat().st_mtime >= source_path.stat().st_mtime:
+                log_step("Reusing normalized AIRR table: {0}".format(output_path))
+                return output_path
+        except FileNotFoundError:
+            pass
+    log_step("Normalizing AIRR table: {0} -> {1}".format(source_path, output_path))
     frame = read_airr_like_table(source_path)
     standardized = to_tcremp_airr_frame(frame, chain_default=chain_default)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     standardized.to_csv(output_path, sep="\t", index=False)
+    log_step("Wrote normalized AIRR rows={0}: {1}".format(len(standardized), output_path))
     return output_path
 
 
@@ -129,9 +152,10 @@ def validate_embedding_airr_pair(airr_path: Path, embedding_path: Path) -> int:
         raise FileNotFoundError("AIRR file is missing: {0}".format(airr_path))
     if not embedding_path.exists():
         raise FileNotFoundError("Embedding parquet is missing: {0}".format(embedding_path))
+    log_step("Validating AIRR/parquet pair: airr={0}, embedding={1}".format(airr_path, embedding_path))
     validate_tcremp_airr_columns(airr_path)
     airr_rows = len(read_airr_like_table(airr_path))
-    embedding_rows = len(pd.read_parquet(embedding_path))
+    embedding_rows = parquet_row_count(embedding_path)
     if airr_rows != embedding_rows:
         raise ValueError(
             "AIRR/embedding row mismatch: airr_rows={0}, embedding_rows={1}, airr_path={2}, embedding_path={3}".format(
@@ -141,6 +165,7 @@ def validate_embedding_airr_pair(airr_path: Path, embedding_path: Path) -> int:
                 embedding_path,
             )
         )
+    log_step("Validated row counts: rows={0}".format(airr_rows))
     return embedding_rows
 
 
@@ -155,9 +180,11 @@ def build_dataset_manifest(
     rows: list[dict[str, object]] = []
     vdjdb_background_airr = Path(vdjdb_bg_airr)
     vdjdb_background_embedding = Path(vdjdb_bg_embedding)
+    log_step("Validating shared VDJdb background inputs")
     validate_embedding_airr_pair(vdjdb_background_airr, vdjdb_background_embedding)
 
     for target_key in sorted(VDJDB_TARGETS):
+        log_step("Preparing VDJdb dataset target={0}".format(target_key))
         resolved = resolve_vdjdb_embedding_path(target_key, vdjdb_embed_dir)
         rep_path = resolve_vdjdb_rep_path(target_key, vdjdb_airr_dir)
         validate_embedding_airr_pair(rep_path, resolved["sample_embedding"])
@@ -180,7 +207,10 @@ def build_dataset_manifest(
             }
         )
 
-    for donor_id in discover_yfv_donor_ids(yfv_runs_dir):
+    donor_ids = discover_yfv_donor_ids(yfv_runs_dir)
+    log_step("Discovered YFV donors count={0} in {1}".format(len(donor_ids), yfv_runs_dir))
+    for donor_id in donor_ids:
+        log_step("Preparing YFV dataset donor={0}".format(donor_id))
         resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
         sample_airr = Path(resolved["sample_representation"])
         background_airr = Path(resolved["background_representation"])
@@ -224,7 +254,11 @@ def write_processed_datasets(
     normalized_yfv_airr_dir.mkdir(parents=True, exist_ok=True)
 
     yfv_runs_dir = Path(yfv_runs_dir)
-    for donor_id in discover_yfv_donor_ids(yfv_runs_dir):
+    donor_ids = discover_yfv_donor_ids(yfv_runs_dir)
+    log_step("Starting dataset preparation; processed_dir={0}".format(processed_dir))
+    log_step("Discovered YFV donors for normalization count={0} in {1}".format(len(donor_ids), yfv_runs_dir))
+    for donor_id in donor_ids:
+        log_step("Materializing normalized YFV AIRR donor={0}".format(donor_id))
         resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
         materialize_standardized_airr_table(
             Path(resolved["sample_representation"]),
@@ -257,6 +291,8 @@ def write_processed_datasets(
     }
     dataset_manifest.to_csv(output_paths["dataset_manifest"], sep="\t", index=False)
     known_yfv.to_csv(output_paths["known_yfv"], sep="\t", index=False)
+    log_step("Wrote dataset manifest rows={0}: {1}".format(len(dataset_manifest), output_paths["dataset_manifest"]))
+    log_step("Wrote known YFV clonotypes rows={0}: {1}".format(len(known_yfv), output_paths["known_yfv"]))
     return output_paths
 
 
