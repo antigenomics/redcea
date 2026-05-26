@@ -443,7 +443,7 @@ def parse_args():
     parser.add_argument("--tcrvdb-path", default=str(Path.home() / "01_05_2025_TCRvdb.csv"))
     parser.add_argument("--padj-threshold", type=float, default=DEFAULT_TCRVDB_PADJ_THRESHOLD)
     parser.add_argument("--nproc", type=int, default=None)
-    parser.add_argument("--grid-size", choices=["small", "large"], default="small")
+    parser.add_argument("--grid-size", choices=["small", "large", "focused_vdbscan_leiden"], default="small")
     parser.add_argument("--mode", choices=["manifest", "single", "all", "consolidate"], default="all")
     parser.add_argument("--single-manifest-path", default=None)
     parser.add_argument("--single-row-index", type=int, default=None, help="1-based manifest row index for Slurm arrays.")

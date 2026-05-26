@@ -17,6 +17,14 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
+PYTHON_BIN="${BENCHMARK_PYTHON:-}"
+if [[ -z "$PYTHON_BIN" && -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+  PYTHON_BIN="${CONDA_PREFIX}/bin/python"
+fi
+if [[ -z "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python"
+fi
+
 echo "[$(date)] Starting metadata consolidation in $(pwd)"
-python -u benchmark/run_benchmark.py --mode consolidate
+"$PYTHON_BIN" -u benchmark/run_benchmark.py --mode consolidate
 echo "[$(date)] Finished metadata consolidation"

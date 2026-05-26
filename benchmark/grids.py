@@ -62,6 +62,20 @@ SMALL_GRID = {
 }
 
 
+VDBSCAN_LEIDEN_FOCUSED_GRID = {
+    "vdbscan_leiden": {
+        "cluster_min_samples": [3],
+        "k_neighbors": [15, 20, 24, 30],
+        "eps_k_neighbors": [8, 12, 15, 20],
+        "eps_estimation_based_on": ["sample", "background", "all"],
+        "vdbscan_sym_rule": ["asymmetric", "max"],
+        "leiden_resolution": [1.5, 2.0, 2.5, 3.0],
+        "cluster_pc_components": [50],
+        "enrichment_test": ["zbinom"],
+    },
+}
+
+
 LARGE_GRID = {
     "dbscan": _paired_neighbor_grid(
         neighbor_values=[4, 8, 15],
@@ -81,17 +95,7 @@ LARGE_GRID = {
             "enrichment_test": ["zbinom"],
         },
     ),
-    "vdbscan_leiden": _paired_neighbor_grid(
-        neighbor_values=[4, 8, 15],
-        base_params={"vdbscan_sym_rule": "asymmetric"},
-        extra_grid={
-            "cluster_min_samples": [3, 5],
-            "eps_estimation_based_on": ["sample", "background"],
-            "leiden_resolution": [0.5, 1.0, 2.0],
-            "cluster_pc_components": [50],
-            "enrichment_test": ["zbinom"],
-        },
-    ),
+    "vdbscan_leiden": VDBSCAN_LEIDEN_FOCUSED_GRID["vdbscan_leiden"],
     "leiden": {
         "cluster_min_samples": [3, 5],
         "k_neighbors": [4, 8, 15],
@@ -133,6 +137,8 @@ def get_grid_spec(grid_size: str) -> dict[str, dict[str, list[object]]]:
         return SMALL_GRID
     if grid_size == "large":
         return LARGE_GRID
+    if grid_size == "focused_vdbscan_leiden":
+        return VDBSCAN_LEIDEN_FOCUSED_GRID
     raise KeyError("Unknown grid_size: {0}".format(grid_size))
 
 

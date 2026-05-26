@@ -18,6 +18,14 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
+PYTHON_BIN="${BENCHMARK_PYTHON:-}"
+if [[ -z "$PYTHON_BIN" && -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+  PYTHON_BIN="${CONDA_PREFIX}/bin/python"
+fi
+if [[ -z "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python"
+fi
+
 echo "[$(date)] Starting YFV array task ${SLURM_ARRAY_TASK_ID} in $(pwd)"
-python -u benchmark/run_benchmark.py --mode single --single-manifest-path results/run_metadata/clustering_manifest_yfv.tsv --single-row-index "${SLURM_ARRAY_TASK_ID}"
+"$PYTHON_BIN" -u benchmark/run_benchmark.py --mode single --single-manifest-path results/run_metadata/clustering_manifest_yfv.tsv --single-row-index "${SLURM_ARRAY_TASK_ID}"
 echo "[$(date)] Finished YFV array task ${SLURM_ARRAY_TASK_ID}"

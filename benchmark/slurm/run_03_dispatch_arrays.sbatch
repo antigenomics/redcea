@@ -17,12 +17,20 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
+PYTHON_BIN="${BENCHMARK_PYTHON:-}"
+if [[ -z "$PYTHON_BIN" && -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+  PYTHON_BIN="${CONDA_PREFIX}/bin/python"
+fi
+if [[ -z "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python"
+fi
+
 VDJDB_MANIFEST="results/run_metadata/clustering_manifest_vdjdb.tsv"
 YFV_MANIFEST="results/run_metadata/clustering_manifest_yfv.tsv"
 
 count_rows() {
   local file_path="$1"
-  python - "$file_path" <<'PY'
+  "$PYTHON_BIN" - "$file_path" <<'PY'
 from pathlib import Path
 import pandas as pd
 import sys
@@ -35,6 +43,8 @@ PY
 VDJDB_COUNT="$(count_rows "$VDJDB_MANIFEST")"
 YFV_COUNT="$(count_rows "$YFV_MANIFEST")"
 echo "Dispatch working directory: $(pwd)"
+echo "Python interpreter: ${PYTHON_BIN}"
+echo "Benchmark grid size: ${BENCHMARK_GRID_SIZE:-small}"
 echo "VDJdb manifest: ${VDJDB_MANIFEST} rows=${VDJDB_COUNT}"
 echo "YFV manifest: ${YFV_MANIFEST} rows=${YFV_COUNT}"
 

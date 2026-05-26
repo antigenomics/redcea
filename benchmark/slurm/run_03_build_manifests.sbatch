@@ -17,4 +17,12 @@ if [[ -n "${BENCHMARK_ENV_ACTIVATE:-}" ]]; then
   source "$BENCHMARK_ENV_ACTIVATE"
 fi
 
-python benchmark/run_benchmark.py --mode manifest --grid-size "${BENCHMARK_GRID_SIZE:-small}"
+PYTHON_BIN="${BENCHMARK_PYTHON:-}"
+if [[ -z "$PYTHON_BIN" && -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+  PYTHON_BIN="${CONDA_PREFIX}/bin/python"
+fi
+if [[ -z "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python"
+fi
+
+"$PYTHON_BIN" benchmark/run_benchmark.py --mode manifest --grid-size "${BENCHMARK_GRID_SIZE:-small}"

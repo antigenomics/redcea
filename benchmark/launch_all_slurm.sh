@@ -13,9 +13,9 @@ submit_job() {
   local script_path="$2"
   local output
   if [[ -n "$dependency" ]]; then
-    output="$(sbatch --parsable --dependency=afterok:${dependency} "$script_path")"
+    output="$(sbatch --parsable --export=ALL --dependency=afterok:${dependency} "$script_path")"
   else
-    output="$(sbatch --parsable "$script_path")"
+    output="$(sbatch --parsable --export=ALL "$script_path")"
   fi
   echo "$output"
 }
@@ -26,6 +26,8 @@ job03="$(submit_job "$job01" "$SLURM_DIR/run_03_build_manifests.sbatch")"
 job03_dispatch="$(sbatch --parsable --dependency=afterok:${job03} --export=ALL,DENSITY_JOB_ID=${job02} "$SLURM_DIR/run_03_dispatch_arrays.sbatch")"
 
 echo "Submitted benchmark jobs:"
+echo "  BENCHMARK_GRID_SIZE:            ${BENCHMARK_GRID_SIZE:-small}"
+echo "  BENCHMARK_PYTHON:               ${BENCHMARK_PYTHON:-auto}"
 echo "  01_prepare_datasets:            $job01"
 echo "  02_density_by_length:           $job02"
 echo "  03_build_manifests:             $job03"

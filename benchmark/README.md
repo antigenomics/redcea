@@ -27,6 +27,9 @@ The initial priority batch is:
 - `vdbscan_leiden`
 - `leiden`
 
+For follow-up tuning of the hybrid only, use `grid_size=focused_vdbscan_leiden`.
+That manifest contains only `vdbscan_leiden` runs and avoids relaunching the other methods.
+
 ## Datasets
 
 ### VDJdb / TCRvdb
