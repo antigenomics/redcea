@@ -15,7 +15,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from benchmark.airr_utils import standardize_metadata_frame
+from benchmark.airr_utils import standardize_metadata_frame, to_tcremp_airr_frame
 from benchmark.grids import get_enabled_methods, get_method_grid
 from benchmark.prepare_datasets import (
     DEFAULT_TCRVDB_PADJ_THRESHOLD,
@@ -199,15 +199,11 @@ def standardize_redcea_assignments(
     truth_table: pd.DataFrame,
 ) -> pd.DataFrame:
     standardized = standardize_metadata_frame(cluster_df, chain_default="TRB").reset_index(drop=True)
+    airr_like = to_tcremp_airr_frame(cluster_df, chain_default="TRB").reset_index(drop=True)
     out = cluster_df.copy().reset_index(drop=True)
-    if "junction_aa" not in out.columns and "cdr3" in out.columns:
-        out["junction_aa"] = out["cdr3"]
-    if "v_call" not in out.columns and "v.segm" in out.columns:
-        out["v_call"] = out["v.segm"]
-    if "j_call" not in out.columns and "j.segm" in out.columns:
-        out["j_call"] = out["j.segm"]
-    if "locus" not in out.columns and "chain" in out.columns:
-        out["locus"] = out["chain"].map({"TRB": "beta", "TRA": "alpha"}).fillna(out["chain"])
+    for column in ("junction_aa", "v_call", "j_call", "locus"):
+        if column not in out.columns:
+            out[column] = airr_like[column]
 
     out["cdr3"] = standardized["cdr3"]
     out["v_gene"] = standardized["v_gene"]

@@ -112,16 +112,21 @@ def load_assignment_tables(
     only_success: bool = True,
     dataset_mode: str | None = None,
     columns: list[str] | None = ASSIGNMENT_EVAL_COLUMNS,
+    consolidate_metadata: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     ensure_output_dirs()
     assignments_root = repo_path(assignments_dir)
     metadata_parts_root = repo_path(metadata_parts_dir)
     metadata_out = repo_path(metadata_path)
-    log_step("Consolidating run metadata from {0}".format(metadata_parts_root))
-    run_metadata = consolidate_run_metadata(
-        metadata_parts_dir=metadata_parts_root,
-        metadata_path=metadata_out,
-    )
+    if consolidate_metadata:
+        log_step("Consolidating run metadata from {0}".format(metadata_parts_root))
+        run_metadata = consolidate_run_metadata(
+            metadata_parts_dir=metadata_parts_root,
+            metadata_path=metadata_out,
+        )
+    else:
+        log_step("Loading run metadata without consolidation: {0}".format(metadata_out))
+        run_metadata = pd.read_csv(metadata_out, sep="\t")
     if len(run_metadata):
         status_counts = run_metadata["status"].value_counts(dropna=False).to_dict()
     else:
@@ -483,12 +488,23 @@ def run_vdjdb_evaluation(
     fig3_stem: str | Path = "figures/clustering_strategy/fig3_vdjdb_cluster_concentration",
 ) -> pd.DataFrame:
     log_step("Starting VDJdb evaluation")
+    metadata_path = repo_path(metadata_path)
+    repaired_metadata_path = repo_path("results/run_metadata/clustering_runs_vdjdb_repaired.tsv")
+    use_repaired_metadata = False
+    if Path(metadata_path).name.endswith("_repaired.tsv") and Path(metadata_path).exists():
+        use_repaired_metadata = True
+    elif Path(metadata_path) == repo_path("results/run_metadata/clustering_runs.tsv") and repaired_metadata_path.exists():
+        use_repaired_metadata = True
+        metadata_path = repaired_metadata_path
+    if use_repaired_metadata:
+        log_step("Using repaired VDJdb metadata file: {0}".format(metadata_path))
     assignments, run_metadata = load_assignment_tables(
         assignments_dir=assignments_dir,
         metadata_parts_dir=metadata_parts_dir,
         metadata_path=metadata_path,
         only_success=True,
         dataset_mode="vdjdb",
+        consolidate_metadata=not use_repaired_metadata,
     )
     if assignments.empty or "dataset_mode" not in assignments.columns:
         metrics_df = pd.DataFrame()
