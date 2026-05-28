@@ -6,6 +6,7 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 from benchmark.airr_utils import (
     best_clone_id_key,
@@ -228,12 +229,13 @@ def _compute_vdjdb_metrics_from_redcea_runs(
         log_step("redcea_runs directory does not exist, skipping direct VDJdb scan: {0}".format(redcea_runs_root))
         return pd.DataFrame()
 
-    for run_dir in sorted(redcea_runs_root.iterdir()):
-        if not run_dir.is_dir():
-            continue
+    run_dirs = [
+        path
+        for path in sorted(redcea_runs_root.iterdir())
+        if path.is_dir() and path.name.startswith("vdjdb_")
+    ]
+    for run_dir in tqdm(run_dirs, desc="VDJdb runs", mininterval=0.5):
         run_id = run_dir.name
-        if not run_id.startswith("vdjdb_"):
-            continue
         cluster_path = run_dir / "{0}_tcremp_clusters.tsv".format(run_id)
         if not cluster_path.exists():
             skipped_runs += 1
