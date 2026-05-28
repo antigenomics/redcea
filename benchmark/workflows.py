@@ -29,7 +29,11 @@ from benchmark.plotting import (
     plot_yfv_enrichment_summary,
     plot_yfv_known_recovery_heatmap,
 )
+from benchmark.data_sources import DEFAULT_TCRVDB_PADJ_THRESHOLD, DEFAULT_TCRVDB_PATH
+from benchmark.import_archived_redcea_results import parse_run_identity
+from benchmark.prepare_datasets import build_vdjdb_truth_table
 from benchmark.run_benchmark import consolidate_run_metadata
+from benchmark.run_benchmark import standardize_redcea_assignments
 from benchmark.data_sources import REPO_ROOT
 
 
@@ -171,6 +175,149 @@ def load_assignment_tables(
         )
     )
     return assignments, selected_metadata
+
+
+def _load_metadata_lookup(metadata_paths: list[Path]) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    seen_paths: set[Path] = set()
+    for path in metadata_paths:
+        resolved = Path(path)
+        if resolved in seen_paths or not resolved.exists():
+            continue
+        seen_paths.add(resolved)
+        try:
+            frames.append(pd.read_csv(resolved, sep="\t"))
+        except Exception as exc:
+            log_step("Skipping unreadable metadata source {0}: {1}".format(resolved, exc))
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True)
+    if "run_id" not in combined.columns:
+        return pd.DataFrame()
+    return combined.drop_duplicates(subset=["run_id"], keep="last").reset_index(drop=True)
+
+
+def _load_vdjdb_results_from_redcea_runs(
+    *,
+    assignments_dir: str | Path,
+    redcea_runs_dir: str | Path,
+    metadata_path: str | Path,
+    tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
+    padj_threshold: float = DEFAULT_TCRVDB_PADJ_THRESHOLD,
+    columns: list[str] | None = ASSIGNMENT_EVAL_COLUMNS,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    ensure_output_dirs()
+    assignments_root = repo_path(assignments_dir)
+    assignments_root.mkdir(parents=True, exist_ok=True)
+    redcea_runs_root = repo_path(redcea_runs_dir)
+    metadata_out = repo_path(metadata_path)
+    metadata_out.parent.mkdir(parents=True, exist_ok=True)
+    repaired_metadata_path = repo_path("results/run_metadata/clustering_runs_vdjdb_repaired.tsv")
+    default_metadata_path = repo_path("results/run_metadata/clustering_runs.tsv")
+    metadata_lookup = _load_metadata_lookup([metadata_out, default_metadata_path, repaired_metadata_path])
+    metadata_by_run = metadata_lookup.set_index("run_id", drop=False) if len(metadata_lookup) else pd.DataFrame()
+    truth_table = build_vdjdb_truth_table(tcrvdb_path, padj_threshold=padj_threshold)
+
+    rows: list[dict[str, object]] = []
+    frames: list[pd.DataFrame] = []
+    rebuilt_assignments = 0
+    reused_assignments = 0
+    skipped_runs = 0
+    unreadable_runs = 0
+
+    if not redcea_runs_root.exists():
+        log_step("redcea_runs directory does not exist, skipping direct VDJdb scan: {0}".format(redcea_runs_root))
+        return pd.DataFrame(), pd.DataFrame()
+
+    for run_dir in sorted(redcea_runs_root.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        run_id = run_dir.name
+        if not run_id.startswith("vdjdb_"):
+            continue
+        cluster_path = run_dir / "{0}_tcremp_clusters.tsv".format(run_id)
+        if not cluster_path.exists():
+            skipped_runs += 1
+            continue
+        try:
+            run_info = parse_run_identity(run_id)
+        except Exception as exc:
+            unreadable_runs += 1
+            log_step("Skipping VDJdb run with unparseable run_id={0}: {1}".format(run_id, exc))
+            continue
+
+        metadata_row = metadata_by_run.loc[run_id] if len(metadata_by_run) and run_id in metadata_by_run.index else {}
+        dataset = str(metadata_row.get("dataset", run_info["dataset"]))
+        dataset_mode = str(metadata_row.get("dataset_mode", run_info["dataset_mode"]))
+        method = str(metadata_row.get("method", run_info["method"]))
+        parameter_json = str(metadata_row.get("parameter_json", "{}"))
+        runtime_seconds = float(metadata_row.get("runtime_seconds", np.nan))
+        assignment_path = assignments_root / "{0}.parquet".format(run_id)
+
+        if assignment_path.exists():
+            assignments = read_assignment_parquet(assignment_path, columns=columns)
+            reused_assignments += 1
+        else:
+            cluster_df = pd.read_csv(cluster_path, sep="\t")
+            assignments = standardize_redcea_assignments(
+                cluster_df,
+                run_id=run_id,
+                dataset=dataset,
+                dataset_mode=dataset_mode,
+                method=method,
+                parameter_json=parameter_json,
+                epitope=str(run_info["epitope"]),
+                donor_id=None,
+                truth_table=truth_table,
+            )
+            assignments.to_parquet(assignment_path, index=False)
+            if columns is not None:
+                selected_columns = [column for column in columns if column in assignments.columns]
+                assignments = assignments[selected_columns].copy()
+            rebuilt_assignments += 1
+
+        frames.append(assignments)
+        rows.append(
+            {
+                "run_id": run_id,
+                "dataset": dataset,
+                "dataset_mode": dataset_mode,
+                "method": method,
+                "parameter_json": parameter_json,
+                "n_points": int(len(assignments)),
+                "n_clusters": int(assignments.loc[~assignments["is_noise"], "cluster_id"].nunique()) if len(assignments) else 0,
+                "n_noise": int(assignments["is_noise"].sum()) if len(assignments) else 0,
+                "noise_fraction": float(assignments["is_noise"].mean()) if len(assignments) else 0.0,
+                "runtime_seconds": runtime_seconds,
+                "status": "success",
+                "error_message": "",
+                "error_traceback": "",
+                "redcea_output_dir": str(run_dir),
+            }
+        )
+
+    run_metadata = pd.DataFrame(rows)
+    if len(run_metadata):
+        run_metadata = run_metadata.drop_duplicates(subset=["run_id"], keep="last").sort_values("run_id").reset_index(drop=True)
+        run_metadata.to_csv(metadata_out, sep="\t", index=False)
+    assignments = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    log_step(
+        "Loaded VDJdb runs directly from redcea_runs: successful_runs={0}, reused_assignments={1}, rebuilt_assignments={2}, skipped_without_clusters={3}, skipped_unparseable={4}".format(
+            len(run_metadata),
+            reused_assignments,
+            rebuilt_assignments,
+            skipped_runs,
+            unreadable_runs,
+        )
+    )
+    log_step(
+        "Materialized VDJdb assignments from redcea_runs: rows={0}, columns={1}, metadata_path={2}".format(
+            len(assignments),
+            len(assignments.columns),
+            metadata_out,
+        )
+    )
+    return assignments, run_metadata
 
 
 def compute_density_by_length(
@@ -483,29 +630,35 @@ def run_vdjdb_evaluation(
     assignments_dir: str | Path = "results/clustering_assignments",
     metadata_parts_dir: str | Path = "results/run_metadata/clustering_run_parts",
     metadata_path: str | Path = "results/run_metadata/clustering_runs.tsv",
+    redcea_runs_dir: str | Path = "results/redcea_runs",
     metrics_path: str | Path = "results/metrics/vdjdb_clustering_metrics.tsv",
     fig2_stem: str | Path = "figures/clustering_strategy/fig2_vdjdb_f1_precision_recall",
     fig3_stem: str | Path = "figures/clustering_strategy/fig3_vdjdb_cluster_concentration",
+    tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
+    padj_threshold: float = DEFAULT_TCRVDB_PADJ_THRESHOLD,
 ) -> pd.DataFrame:
     log_step("Starting VDJdb evaluation")
-    metadata_path = repo_path(metadata_path)
-    repaired_metadata_path = repo_path("results/run_metadata/clustering_runs_vdjdb_repaired.tsv")
-    use_repaired_metadata = False
-    if Path(metadata_path).name.endswith("_repaired.tsv") and Path(metadata_path).exists():
-        use_repaired_metadata = True
-    elif Path(metadata_path) == repo_path("results/run_metadata/clustering_runs.tsv") and repaired_metadata_path.exists():
-        use_repaired_metadata = True
-        metadata_path = repaired_metadata_path
-    if use_repaired_metadata:
-        log_step("Using repaired VDJdb metadata file: {0}".format(metadata_path))
-    assignments, run_metadata = load_assignment_tables(
+    assignments, run_metadata = _load_vdjdb_results_from_redcea_runs(
         assignments_dir=assignments_dir,
-        metadata_parts_dir=metadata_parts_dir,
+        redcea_runs_dir=redcea_runs_dir,
         metadata_path=metadata_path,
-        only_success=True,
-        dataset_mode="vdjdb",
-        consolidate_metadata=not use_repaired_metadata,
+        tcrvdb_path=tcrvdb_path,
+        padj_threshold=padj_threshold,
     )
+    if assignments.empty and not repo_path(redcea_runs_dir).exists():
+        log_step(
+            "Falling back to metadata-based VDJdb loading because redcea_runs is unavailable: {0}".format(
+                repo_path(redcea_runs_dir)
+            )
+        )
+        assignments, run_metadata = load_assignment_tables(
+            assignments_dir=assignments_dir,
+            metadata_parts_dir=metadata_parts_dir,
+            metadata_path=metadata_path,
+            only_success=True,
+            dataset_mode="vdjdb",
+            consolidate_metadata=True,
+        )
     if assignments.empty or "dataset_mode" not in assignments.columns:
         metrics_df = pd.DataFrame()
         metrics_path = repo_path(metrics_path)
