@@ -21,69 +21,77 @@ def _fdr_bh(pvals):
     return out
 
 
+def _compute_vdjdb_metrics_for_frame(assignments: pd.DataFrame, metadata_row) -> dict[str, object] | None:
+    if assignments.empty:
+        return None
+    run_id = str(assignments["run_id"].iloc[0])
+    epitope = assignments["epitope"].iloc[0]
+    cluster_df = assignments.loc[~assignments["is_noise"]]
+    labeled = cluster_df.loc[cluster_df["truth_label"].isin(["positive", "negative"])]
+    assoc = pd.Series(dtype=bool)
+    if not labeled.empty:
+        counts = labeled.groupby(["cluster_id", "truth_label"]).size().unstack(fill_value=0)
+        assoc = ((counts.get("positive", 0) > 0) & (counts.get("positive", 0) >= counts.get("negative", 0)))
+    associated_clusters = set(assoc[assoc].index.tolist())
+    labeled_all = assignments.loc[assignments["truth_label"].isin(["positive", "negative"])]
+    positives = labeled_all["truth_label"] == "positive"
+    negatives = labeled_all["truth_label"] == "negative"
+    recovered = labeled_all["cluster_id"].isin(associated_clusters) & ~labeled_all["is_noise"]
+    tp = int((positives & recovered).sum())
+    fp = int((negatives & recovered).sum())
+    fn = int((positives & ~recovered).sum())
+    precision = float(tp / (tp + fp)) if (tp + fp) else 0.0
+    recall = float(tp / (tp + fn)) if (tp + fn) else 0.0
+    f1 = float(2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+
+    total_labeled = 0
+    weighted_purity_sum = 0.0
+    positive_counts = []
+    positive_clusters = 0
+    for _, cluster in cluster_df.groupby("cluster_id"):
+        labeled_cluster = cluster.loc[cluster["truth_label"].isin(["positive", "negative"])]
+        if labeled_cluster.empty:
+            continue
+        label_counts = labeled_cluster["truth_label"].value_counts()
+        size = int(len(labeled_cluster))
+        purity = float(label_counts.max() / size)
+        total_labeled += size
+        weighted_purity_sum += purity * size
+        pos_count = int((labeled_cluster["truth_label"] == "positive").sum())
+        if pos_count > 0:
+            positive_counts.append(pos_count)
+            positive_clusters += 1
+    positive_counts = sorted(positive_counts, reverse=True)
+    total_positive = max(1, int(positives.sum()))
+    return {
+        "run_id": run_id,
+        "epitope": epitope,
+        "method": assignments["method"].iloc[0],
+        "parameter_json": assignments["parameter_json"].iloc[0],
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "weighted_cluster_purity": float(weighted_purity_sum / max(1, total_labeled)),
+        "positive_cluster_concentration_top1": float(sum(positive_counts[:1]) / total_positive),
+        "positive_cluster_concentration_top5": float(sum(positive_counts[:5]) / total_positive),
+        "positive_fragmentation": int(positive_clusters),
+        "positive_fragmentation_norm": float(positive_clusters / max(1, tp)),
+        "n_clusters": int(metadata_row.get("n_clusters", cluster_df["cluster_id"].nunique())),
+        "noise_fraction": float(metadata_row.get("noise_fraction", assignments["is_noise"].mean())),
+        "runtime_seconds": float(metadata_row.get("runtime_seconds", np.nan)),
+    }
+
+
 def compute_vdjdb_metrics(assignments: pd.DataFrame, run_metadata: pd.DataFrame) -> pd.DataFrame:
     if assignments.empty:
         return pd.DataFrame()
     rows = []
     metadata_lookup = run_metadata.set_index("run_id", drop=False) if len(run_metadata) else pd.DataFrame()
     for (run_id, epitope), frame in assignments.groupby(["run_id", "epitope"]):
-        cluster_df = frame.loc[~frame["is_noise"]].copy()
-        labeled = cluster_df.loc[cluster_df["truth_label"].isin(["positive", "negative"])].copy()
-        assoc = pd.Series(dtype=bool)
-        if not labeled.empty:
-            counts = labeled.groupby(["cluster_id", "truth_label"]).size().unstack(fill_value=0)
-            assoc = ((counts.get("positive", 0) > 0) & (counts.get("positive", 0) >= counts.get("negative", 0)))
-        associated_clusters = set(assoc[assoc].index.tolist())
-        labeled_all = frame.loc[frame["truth_label"].isin(["positive", "negative"])].copy()
-        positives = labeled_all["truth_label"] == "positive"
-        negatives = labeled_all["truth_label"] == "negative"
-        recovered = labeled_all["cluster_id"].isin(associated_clusters) & ~labeled_all["is_noise"]
-        tp = int((positives & recovered).sum())
-        fp = int((negatives & recovered).sum())
-        fn = int((positives & ~recovered).sum())
-        precision = float(tp / (tp + fp)) if (tp + fp) else 0.0
-        recall = float(tp / (tp + fn)) if (tp + fn) else 0.0
-        f1 = float(2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
-
-        total_labeled = 0
-        weighted_purity_sum = 0.0
-        positive_counts = []
-        positive_clusters = 0
-        for _, cluster in cluster_df.groupby("cluster_id"):
-            labeled_cluster = cluster.loc[cluster["truth_label"].isin(["positive", "negative"])]
-            if labeled_cluster.empty:
-                continue
-            label_counts = labeled_cluster["truth_label"].value_counts()
-            size = int(len(labeled_cluster))
-            purity = float(label_counts.max() / size)
-            total_labeled += size
-            weighted_purity_sum += purity * size
-            pos_count = int((labeled_cluster["truth_label"] == "positive").sum())
-            if pos_count > 0:
-                positive_counts.append(pos_count)
-                positive_clusters += 1
-        positive_counts = sorted(positive_counts, reverse=True)
-        total_positive = max(1, int(positives.sum()))
         metadata_row = metadata_lookup.loc[run_id] if len(metadata_lookup) and run_id in metadata_lookup.index else {}
-        rows.append(
-            {
-                "run_id": run_id,
-                "epitope": epitope,
-                "method": frame["method"].iloc[0],
-                "parameter_json": frame["parameter_json"].iloc[0],
-                "precision": precision,
-                "recall": recall,
-                "f1": f1,
-                "weighted_cluster_purity": float(weighted_purity_sum / max(1, total_labeled)),
-                "positive_cluster_concentration_top1": float(sum(positive_counts[:1]) / total_positive),
-                "positive_cluster_concentration_top5": float(sum(positive_counts[:5]) / total_positive),
-                "positive_fragmentation": int(positive_clusters),
-                "positive_fragmentation_norm": float(positive_clusters / max(1, tp)),
-                "n_clusters": int(metadata_row.get("n_clusters", cluster_df["cluster_id"].nunique())),
-                "noise_fraction": float(metadata_row.get("noise_fraction", frame["is_noise"].mean())),
-                "runtime_seconds": float(metadata_row.get("runtime_seconds", np.nan)),
-            }
-        )
+        row = _compute_vdjdb_metrics_for_frame(frame, metadata_row)
+        if row is not None:
+            rows.append(row)
     return pd.DataFrame(rows)
 
 

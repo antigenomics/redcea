@@ -14,6 +14,7 @@ from benchmark.airr_utils import (
     standardize_metadata_frame,
 )
 from benchmark.evaluation import (
+    _compute_vdjdb_metrics_for_frame,
     compute_cross_donor_overlap,
     compute_known_yfv_recovery,
     compute_vdjdb_metrics,
@@ -81,7 +82,7 @@ def ensure_output_dirs() -> None:
         Path("reports"),
     ]:
         repo_path(path).mkdir(parents=True, exist_ok=True)
-    log_step("Ensured benchmark output directories under {0}".format(REPO_ROOT))
+    return None
 
 
 def read_assignment_parquet(path: Path, columns: list[str] | None = None) -> pd.DataFrame:
@@ -197,7 +198,7 @@ def _load_metadata_lookup(metadata_paths: list[Path]) -> pd.DataFrame:
     return combined.drop_duplicates(subset=["run_id"], keep="last").reset_index(drop=True)
 
 
-def _load_vdjdb_results_from_redcea_runs(
+def _compute_vdjdb_metrics_from_redcea_runs(
     *,
     assignments_dir: str | Path,
     redcea_runs_dir: str | Path,
@@ -205,13 +206,12 @@ def _load_vdjdb_results_from_redcea_runs(
     tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
     padj_threshold: float = DEFAULT_TCRVDB_PADJ_THRESHOLD,
     columns: list[str] | None = ASSIGNMENT_EVAL_COLUMNS,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> pd.DataFrame:
     ensure_output_dirs()
     assignments_root = repo_path(assignments_dir)
     assignments_root.mkdir(parents=True, exist_ok=True)
     redcea_runs_root = repo_path(redcea_runs_dir)
     metadata_out = repo_path(metadata_path)
-    metadata_out.parent.mkdir(parents=True, exist_ok=True)
     repaired_metadata_path = repo_path("results/run_metadata/clustering_runs_vdjdb_repaired.tsv")
     default_metadata_path = repo_path("results/run_metadata/clustering_runs.tsv")
     metadata_lookup = _load_metadata_lookup([metadata_out, default_metadata_path, repaired_metadata_path])
@@ -219,7 +219,6 @@ def _load_vdjdb_results_from_redcea_runs(
     truth_table = build_vdjdb_truth_table(tcrvdb_path, padj_threshold=padj_threshold)
 
     rows: list[dict[str, object]] = []
-    frames: list[pd.DataFrame] = []
     rebuilt_assignments = 0
     reused_assignments = 0
     skipped_runs = 0
@@ -227,7 +226,7 @@ def _load_vdjdb_results_from_redcea_runs(
 
     if not redcea_runs_root.exists():
         log_step("redcea_runs directory does not exist, skipping direct VDJdb scan: {0}".format(redcea_runs_root))
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame()
 
     for run_dir in sorted(redcea_runs_root.iterdir()):
         if not run_dir.is_dir():
@@ -276,48 +275,29 @@ def _load_vdjdb_results_from_redcea_runs(
                 assignments = assignments[selected_columns].copy()
             rebuilt_assignments += 1
 
-        frames.append(assignments)
-        rows.append(
-            {
-                "run_id": run_id,
-                "dataset": dataset,
-                "dataset_mode": dataset_mode,
-                "method": method,
-                "parameter_json": parameter_json,
-                "n_points": int(len(assignments)),
-                "n_clusters": int(assignments.loc[~assignments["is_noise"], "cluster_id"].nunique()) if len(assignments) else 0,
-                "n_noise": int(assignments["is_noise"].sum()) if len(assignments) else 0,
-                "noise_fraction": float(assignments["is_noise"].mean()) if len(assignments) else 0.0,
-                "runtime_seconds": runtime_seconds,
-                "status": "success",
-                "error_message": "",
-                "error_traceback": "",
-                "redcea_output_dir": str(run_dir),
-            }
-        )
+        compact_metadata = {
+            "run_id": run_id,
+            "n_clusters": int(assignments.loc[~assignments["is_noise"], "cluster_id"].nunique()) if len(assignments) else 0,
+            "noise_fraction": float(assignments["is_noise"].mean()) if len(assignments) else 0.0,
+            "runtime_seconds": runtime_seconds,
+        }
+        metric_row = _compute_vdjdb_metrics_for_frame(assignments, compact_metadata)
+        if metric_row is not None:
+            rows.append(metric_row)
 
-    run_metadata = pd.DataFrame(rows)
-    if len(run_metadata):
-        run_metadata = run_metadata.drop_duplicates(subset=["run_id"], keep="last").sort_values("run_id").reset_index(drop=True)
-        run_metadata.to_csv(metadata_out, sep="\t", index=False)
-    assignments = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    log_step(
-        "Loaded VDJdb runs directly from redcea_runs: successful_runs={0}, reused_assignments={1}, rebuilt_assignments={2}, skipped_without_clusters={3}, skipped_unparseable={4}".format(
-            len(run_metadata),
-            reused_assignments,
-            rebuilt_assignments,
-            skipped_runs,
-            unreadable_runs,
-        )
-    )
-    log_step(
-        "Materialized VDJdb assignments from redcea_runs: rows={0}, columns={1}, metadata_path={2}".format(
-            len(assignments),
-            len(assignments.columns),
-            metadata_out,
-        )
-    )
-    return assignments, run_metadata
+    metrics_df = pd.DataFrame(rows)
+    summary_bits = [
+        "runs={0}".format(len(metrics_df)),
+        "reused_assignments={0}".format(reused_assignments),
+    ]
+    if rebuilt_assignments:
+        summary_bits.append("rebuilt_assignments={0}".format(rebuilt_assignments))
+    if skipped_runs:
+        summary_bits.append("skipped_without_clusters={0}".format(skipped_runs))
+    if unreadable_runs:
+        summary_bits.append("skipped_unparseable={0}".format(unreadable_runs))
+    log_step("Computed VDJdb metrics from redcea_runs: {0}".format(", ".join(summary_bits)))
+    return metrics_df
 
 
 def compute_density_by_length(
@@ -638,14 +618,14 @@ def run_vdjdb_evaluation(
     padj_threshold: float = DEFAULT_TCRVDB_PADJ_THRESHOLD,
 ) -> pd.DataFrame:
     log_step("Starting VDJdb evaluation")
-    assignments, run_metadata = _load_vdjdb_results_from_redcea_runs(
+    metrics_df = _compute_vdjdb_metrics_from_redcea_runs(
         assignments_dir=assignments_dir,
         redcea_runs_dir=redcea_runs_dir,
         metadata_path=metadata_path,
         tcrvdb_path=tcrvdb_path,
         padj_threshold=padj_threshold,
     )
-    if assignments.empty and not repo_path(redcea_runs_dir).exists():
+    if metrics_df.empty and not repo_path(redcea_runs_dir).exists():
         log_step(
             "Falling back to metadata-based VDJdb loading because redcea_runs is unavailable: {0}".format(
                 repo_path(redcea_runs_dir)
@@ -659,21 +639,18 @@ def run_vdjdb_evaluation(
             dataset_mode="vdjdb",
             consolidate_metadata=True,
         )
-    if assignments.empty or "dataset_mode" not in assignments.columns:
+        if assignments.empty or "dataset_mode" not in assignments.columns:
+            metrics_df = pd.DataFrame()
+        else:
+            vdjdb_assignments = assignments.loc[assignments["dataset_mode"] == "vdjdb"].copy()
+            metrics_df = compute_vdjdb_metrics(vdjdb_assignments, run_metadata)
+    if metrics_df.empty:
         metrics_df = pd.DataFrame()
         metrics_path = repo_path(metrics_path)
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
         metrics_df.to_csv(metrics_path, sep="\t", index=False)
         log_step("No assignments available for VDJdb evaluation; wrote empty metrics: {0}".format(metrics_path))
         return metrics_df
-    vdjdb_assignments = assignments.loc[assignments["dataset_mode"] == "vdjdb"].copy()
-    log_step(
-        "VDJdb assignments rows={0}, runs={1}".format(
-            len(vdjdb_assignments),
-            vdjdb_assignments["run_id"].nunique() if "run_id" in vdjdb_assignments.columns else 0,
-        )
-    )
-    metrics_df = compute_vdjdb_metrics(vdjdb_assignments, run_metadata)
     metrics_path = repo_path(metrics_path)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_df.to_csv(metrics_path, sep="\t", index=False)
