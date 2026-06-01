@@ -59,6 +59,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-path", default="results/metrics/run_additional_metrics_batch.log")
     parser.add_argument("--workers", type=int, default=14)
     parser.add_argument(
+        "--dataset-mode",
+        choices=["all", "vdjdb", "yfv"],
+        default="all",
+        help="Restrict processing and output tables to one dataset mode.",
+    )
+    parser.add_argument(
+        "--run-id-prefix",
+        default=None,
+        help="Optional run_id prefix filter applied after dataset-mode filtering.",
+    )
+    parser.add_argument(
         "--rewrite-existing",
         action="store_true",
         help="Recompute and rewrite summary files even if additional metric columns are already present.",
@@ -242,6 +253,51 @@ def infer_run_metadata_from_name(run_id: str) -> dict[str, object]:
     return metadata
 
 
+def run_matches_filters(
+    *,
+    run_id: str,
+    manifest_lookup: pd.DataFrame,
+    dataset_mode: str = "all",
+    run_id_prefix: str | None = None,
+) -> bool:
+    if run_id_prefix and not str(run_id).startswith(str(run_id_prefix)):
+        return False
+    if dataset_mode == "all":
+        return True
+
+    inferred = infer_run_metadata_from_name(run_id)
+    inferred_mode = inferred.get("dataset_mode")
+    if inferred_mode == dataset_mode:
+        return True
+    if manifest_lookup.empty or "run_id" not in manifest_lookup.columns:
+        return False
+
+    matched = manifest_lookup.loc[manifest_lookup["run_id"].astype(str) == str(run_id)]
+    if matched.empty or "dataset_mode" not in matched.columns:
+        return False
+    dataset_mode_values = matched["dataset_mode"].dropna().astype(str).unique().tolist()
+    return dataset_mode in dataset_mode_values
+
+
+def select_run_dirs(
+    *,
+    runs_root: Path,
+    manifest_lookup: pd.DataFrame,
+    dataset_mode: str = "all",
+    run_id_prefix: str | None = None,
+) -> list[Path]:
+    return [
+        run_dir
+        for run_dir in sorted(path for path in runs_root.iterdir() if path.is_dir())
+        if run_matches_filters(
+            run_id=run_dir.name,
+            manifest_lookup=manifest_lookup,
+            dataset_mode=dataset_mode,
+            run_id_prefix=run_id_prefix,
+        )
+    ]
+
+
 def resolve_run_metadata(
     *,
     run_id: str,
@@ -280,12 +336,12 @@ def resolve_run_metadata(
 
 def collect_cluster_level_table(
     *,
-    runs_root: Path,
+    run_dirs: list[Path],
     manifest_lookup: pd.DataFrame,
 ) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
 
-    for run_dir in sorted(path for path in runs_root.iterdir() if path.is_dir()):
+    for run_dir in run_dirs:
         prefix = find_run_prefix(run_dir)
         if prefix is None:
             continue
@@ -435,17 +491,30 @@ def main() -> int:
     setup_logging(log_path)
     logging.info("Starting additional metrics batch run")
     logging.info(
-        "runs_root=%s execution_manifest=%s workers=%d rewrite_existing=%s",
+        "runs_root=%s execution_manifest=%s workers=%d rewrite_existing=%s dataset_mode=%s run_id_prefix=%s",
         runs_root,
         execution_manifest,
         args.workers,
         args.rewrite_existing,
+        args.dataset_mode,
+        args.run_id_prefix,
     )
 
-    run_dirs = sorted(path for path in runs_root.iterdir() if path.is_dir())
+    manifest_df = load_execution_manifest(execution_manifest)
+    run_dirs = select_run_dirs(
+        runs_root=runs_root,
+        manifest_lookup=manifest_df,
+        dataset_mode=args.dataset_mode,
+        run_id_prefix=args.run_id_prefix,
+    )
     total = len(run_dirs)
     if total == 0:
-        logging.warning("No run directories found under %s", runs_root)
+        logging.warning(
+            "No run directories matched under %s for dataset_mode=%s run_id_prefix=%s",
+            runs_root,
+            args.dataset_mode,
+            args.run_id_prefix,
+        )
         return 0
 
     started_at = time.perf_counter()
@@ -510,7 +579,6 @@ def main() -> int:
     atomic_write_tsv(result_df, result_manifest_path)
     logging.info("Wrote worker manifest: %s", result_manifest_path)
 
-    manifest_df = load_execution_manifest(execution_manifest)
     manifest_run_ids = set(manifest_df["run_id"].astype(str)) if not manifest_df.empty else set()
     existing_run_ids = {run_dir.name for run_dir in run_dirs}
     matched_runs = len(existing_run_ids & manifest_run_ids)
@@ -521,7 +589,7 @@ def main() -> int:
         len(existing_run_ids),
     )
 
-    cluster_level_df = collect_cluster_level_table(runs_root=runs_root, manifest_lookup=manifest_df)
+    cluster_level_df = collect_cluster_level_table(run_dirs=run_dirs, manifest_lookup=manifest_df)
     run_level_df = build_run_level_table(cluster_level_df)
     atomic_write_tsv(cluster_level_df, cluster_output)
     atomic_write_tsv(run_level_df, run_output)
