@@ -73,11 +73,14 @@ def add_redcea_pipeline_args(parser: argparse.ArgumentParser) -> argparse.Argume
         help="Number of PCA components for distances dimension reduction.",
     )
     parser.add_argument(
+        "-cms",
         "-ms",
+        "--core-min-samples",
         "--cluster-min-samples",
+        dest="core_min_samples",
         type=int,
         default=3,
-        help="min_samples parameter for clustering core points.",
+        help="Minimum number of points in the eps-neighborhood for a point to be considered core.",
     )
     parser.add_argument(
         "-kn",

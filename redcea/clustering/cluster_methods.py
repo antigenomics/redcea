@@ -136,7 +136,7 @@ def run_joint_dbscan_clustering_with_diagnostics(
         "DBSCAN input: shape=%s cluster_algo=%s min_samples=%d k_neighbors=%d eps_k_neighbors=%d pc_components=%d",
         tuple(knn.data_reduced.shape),
         config.cluster_algo,
-        config.cluster_min_samples,
+        config.core_min_samples,
         config.k_neighbors,
         config.eps_k_neighbors,
         config.cluster_pc_components,
@@ -186,7 +186,7 @@ def run_joint_dbscan_clustering_with_diagnostics(
     labels, filter_details = cluster_dbscan_with_filter(
         knn.data_reduced,
         eps=eps,
-        min_samples=config.cluster_min_samples,
+        min_samples=config.core_min_samples,
         nearest_neighbor_distances=d1,
         return_details=True,
     )
@@ -558,7 +558,7 @@ def hierarchical_vdbscan_leiden_clustering(
                 knn_indices=knn.indices,
                 knn_distances_l2=knn.distances,
                 eps_i_l2=eps_i_all,
-                num_points_for_core=config.cluster_min_samples,
+                num_points_for_core=config.core_min_samples,
                 sym_rule=config.vdbscan_sym_rule,
             )
         )
@@ -714,7 +714,7 @@ def run_joint_vdbscan_clustering_with_diagnostics(
         knn_indices=knn.indices,
         knn_distances_l2=knn.distances,
         eps_i_l2=eps_i_all,
-        num_points_for_core=config.cluster_min_samples,
+        num_points_for_core=config.core_min_samples,
         sym_rule=config.vdbscan_sym_rule,
     )
     return JointVdbscanDebugArtifacts(
@@ -751,7 +751,7 @@ def run_joint_clustering(
             knn.data_reduced,
             eps=eps,
             nearest_neighbor_distances=_nearest_neighbor_distances_from_knn(knn.distances),
-            min_samples=config.cluster_min_samples,
+            min_samples=config.core_min_samples,
         )
     if config.cluster_algo == "leiden_dbscan":
         return hierarchical_leiden_dbscan_clustering(
@@ -760,7 +760,7 @@ def run_joint_clustering(
             knn_distances=knn.distances,
             resolution=config.leiden_resolution,
             k_neighbors=config.eps_k_neighbors,
-            num_points_for_core=config.cluster_min_samples,
+            num_points_for_core=config.core_min_samples,
             n_jobs=config.normalized_nproc,
         )
     if config.cluster_algo == "hierarchical_leiden":
@@ -782,7 +782,7 @@ def run_joint_clustering(
             knn_distances=knn.distances,
             resolution=config.leiden_resolution,
             n_jobs=config.normalized_nproc,
-            min_cluster_size=config.cluster_min_samples,
+            min_cluster_size=config.core_min_samples,
             min_cluster_size_mask=sample_mask,
         )
     if config.cluster_algo == "vdbscan":
@@ -798,7 +798,7 @@ def run_joint_clustering(
             knn_indices=knn.indices,
             knn_distances_l2=knn.distances,
             eps_i_l2=eps_i_all,
-            num_points_for_core=config.cluster_min_samples,
+            num_points_for_core=config.core_min_samples,
             sym_rule=config.vdbscan_sym_rule,
         )
     if config.cluster_algo == "vdbscan_leiden":

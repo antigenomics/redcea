@@ -283,7 +283,7 @@ tcremp-run \
 | `--cluster-algo` | `--cluster-algo` | No | `vdbscan` | `vdbscan`, `dbscan`, `leiden`, `hierarchical_leiden`, or `leiden_dbscan` |
 | `--n-bg-points` | `--n-bg-points` | No | all available | Limit background clonotypes to first N entries |
 | `-npc` | `--cluster-pc-components` | No | `50` | Number of PCA components before clustering |
-| `-ms` | `--cluster-min-samples` | No | `3` | Core-point threshold for clustering |
+| `-cms`, `-ms` | `--core-min-samples` | No | `3` | Minimum number of points in the `eps`-neighborhood for a point to be considered core (`--cluster-min-samples` still works as a legacy alias) |
 | `-kn` | `--k-neighbors` | No | `4` | Number of neighbors in the KNN graph |
 | `-ekn` | `--eps-k-neighbors` | No | `4` | K-th neighbor used for eps estimation in `vdbscan` and `dbscan` |
 | `--leiden-resolution` | `--leiden-resolution` | No | `1.0` | Leiden resolution parameter |

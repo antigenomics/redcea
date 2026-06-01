@@ -79,7 +79,7 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
         cluster_algo="leiden",
         n_bg_points=None,
         cluster_pc_components=2,
-        cluster_min_samples=1,
+        core_min_samples=1,
         k_neighbors=2,
         eps_k_neighbors=2,
         leiden_resolution=1.0,

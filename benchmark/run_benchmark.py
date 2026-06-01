@@ -284,7 +284,7 @@ def _build_pipeline_config(manifest_row, params, output_dir: Path, nproc: int | 
         sample_random_clonotypes=False,
         random_seed=int(params.get("random_seed", 17)),
         cluster_pc_components=int(params.get("cluster_pc_components", 50)),
-        cluster_min_samples=int(params.get("cluster_min_samples", 5)),
+        core_min_samples=int(params.get("core_min_samples", params.get("cluster_min_samples", 5))),
         k_neighbors=int(params.get("k_neighbors", 4)),
         eps_k_neighbors=int(params.get("eps_k_neighbors", params.get("k_neighbors", 4))),
         leiden_resolution=float(params.get("leiden_resolution", 1.0)),
