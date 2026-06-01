@@ -331,6 +331,7 @@ def _build_pipeline_config(manifest_row, params, output_dir: Path, nproc: int | 
         enrichment_test=str(params.get("enrichment_test", "zbinom")),
         debug_save_intermediate=False,
         debug_output_dir=None,
+        add_auxiliary_cluster_metrics=bool(params.get("add_auxiliary_cluster_metrics", False)),
     )
 
 
