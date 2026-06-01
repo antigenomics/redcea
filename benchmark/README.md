@@ -30,6 +30,14 @@ The initial priority batch is:
 For follow-up tuning of the hybrid only, use `grid_size=focused_vdbscan_leiden`.
 That manifest contains only `vdbscan_leiden` runs and avoids relaunching the other methods.
 
+For the new low-resolution YFV-only hybrid sweep, use:
+
+- `grid_size=yfv_vdbscan_leiden_lowres`
+- `--dataset-mode-filter yfv`
+- `--yfv-donor-ids P1_F1,P2_F1`
+
+This grid keeps only `vdbscan_leiden`, varies `eps_k_neighbors`, `cluster_min_samples`, and low Leiden resolutions, and produces `18` parameter combinations, i.e. `36` YFV runs for `P1_F1` plus `P2_F1`.
+
 ## Datasets
 
 ### VDJdb / TCRvdb

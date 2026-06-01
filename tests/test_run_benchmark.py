@@ -1,6 +1,6 @@
 import pandas as pd
 
-from benchmark.run_benchmark import standardize_redcea_assignments
+from benchmark.run_benchmark import build_execution_manifest, standardize_redcea_assignments
 
 
 def test_standardize_redcea_assignments_accepts_legacy_beta_columns():
@@ -33,3 +33,29 @@ def test_standardize_redcea_assignments_accepts_legacy_beta_columns():
     assert assignments["v_call"].tolist() == ["TRBV7-2*01", "TRBV6-5*01"]
     assert assignments["j_call"].tolist() == ["TRBJ2-3*01", "TRBJ2-7*01"]
     assert assignments["locus"].tolist() == ["beta", "beta"]
+
+
+def test_build_execution_manifest_filters_to_yfv_p1_p2_lowres_grid(tmp_path):
+    processed_dir = tmp_path / "processed"
+    processed_dir.mkdir()
+    pd.DataFrame(
+        [
+            {"dataset": "vdjdb_glc", "dataset_mode": "vdjdb", "dataset_key": "GLC", "epitope": "GLCTLVAML", "donor_id": None},
+            {"dataset": "yfv_repertoires", "dataset_mode": "yfv", "dataset_key": "P1_F1", "epitope": None, "donor_id": "P1_F1"},
+            {"dataset": "yfv_repertoires", "dataset_mode": "yfv", "dataset_key": "P2_F1", "epitope": None, "donor_id": "P2_F1"},
+            {"dataset": "yfv_repertoires", "dataset_mode": "yfv", "dataset_key": "Q1_F1", "epitope": None, "donor_id": "Q1_F1"},
+        ]
+    ).to_csv(processed_dir / "benchmark_dataset_manifest.tsv", sep="\t", index=False)
+
+    manifest = build_execution_manifest(
+        processed_dir,
+        grid_size="yfv_vdbscan_leiden_lowres",
+        dataset_mode_filter="yfv",
+        yfv_donor_ids=["P1_F1", "P2_F1"],
+    )
+
+    assert manifest["dataset_mode"].tolist().count("yfv") == len(manifest)
+    assert set(manifest["donor_id"]) == {"P1_F1", "P2_F1"}
+    assert manifest["method"].nunique() == 1
+    assert manifest["method"].iloc[0] == "vdbscan_leiden"
+    assert len(manifest) == 36

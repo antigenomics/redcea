@@ -102,8 +102,42 @@ def _load_dataset_manifest(processed_dir: str | Path) -> pd.DataFrame:
     return pd.read_csv(path, sep="\t")
 
 
-def build_execution_manifest(processed_dir, grid_size="small"):
+def _normalize_csv_tokens(raw_value: str | None) -> list[str] | None:
+    if raw_value is None:
+        return None
+    tokens = [token.strip() for token in str(raw_value).split(",") if token.strip()]
+    return tokens or None
+
+
+def _filter_dataset_manifest(
+    dataset_manifest: pd.DataFrame,
+    *,
+    dataset_mode_filter: str = "all",
+    yfv_donor_ids: list[str] | None = None,
+) -> pd.DataFrame:
+    filtered = dataset_manifest.copy()
+    if dataset_mode_filter != "all":
+        filtered = filtered.loc[filtered["dataset_mode"].astype(str) == str(dataset_mode_filter)].copy()
+    if yfv_donor_ids:
+        donor_set = {str(donor_id) for donor_id in yfv_donor_ids}
+        yfv_mask = filtered["dataset_mode"].astype(str) == "yfv"
+        filtered = filtered.loc[~yfv_mask | filtered["donor_id"].astype(str).isin(donor_set)].copy()
+    return filtered.reset_index(drop=True)
+
+
+def build_execution_manifest(
+    processed_dir,
+    grid_size="small",
+    *,
+    dataset_mode_filter: str = "all",
+    yfv_donor_ids: list[str] | None = None,
+):
     dataset_manifest = _load_dataset_manifest(processed_dir)
+    dataset_manifest = _filter_dataset_manifest(
+        dataset_manifest,
+        dataset_mode_filter=dataset_mode_filter,
+        yfv_donor_ids=yfv_donor_ids,
+    )
     grid_manifest = build_grid_manifest(grid_size=grid_size)
     rows = []
     for _, dataset_row in dataset_manifest.iterrows():
@@ -132,8 +166,10 @@ def build_execution_manifest(processed_dir, grid_size="small"):
             rows.append(row)
     execution_manifest = pd.DataFrame(rows)
     log_step(
-        "Built execution manifest for grid_size={0}; dataset_rows={1}; grid_rows={2}; execution_rows={3}".format(
+        "Built execution manifest for grid_size={0}; dataset_mode_filter={1}; yfv_donors={2}; dataset_rows={3}; grid_rows={4}; execution_rows={5}".format(
             grid_size,
+            dataset_mode_filter,
+            ",".join(yfv_donor_ids) if yfv_donor_ids else "all",
             len(dataset_manifest),
             len(grid_manifest),
             len(execution_manifest),
@@ -443,7 +479,17 @@ def parse_args():
     parser.add_argument("--tcrvdb-path", default=str(Path.home() / "01_05_2025_TCRvdb.csv"))
     parser.add_argument("--padj-threshold", type=float, default=DEFAULT_TCRVDB_PADJ_THRESHOLD)
     parser.add_argument("--nproc", type=int, default=None)
-    parser.add_argument("--grid-size", choices=["small", "large", "focused_vdbscan_leiden"], default="small")
+    parser.add_argument(
+        "--grid-size",
+        choices=["small", "large", "focused_vdbscan_leiden", "yfv_vdbscan_leiden_lowres"],
+        default="small",
+    )
+    parser.add_argument("--dataset-mode-filter", choices=["all", "vdjdb", "yfv"], default="all")
+    parser.add_argument(
+        "--yfv-donor-ids",
+        default=None,
+        help="Comma-separated YFV donor IDs to keep in the execution manifest, e.g. P1_F1,P2_F1.",
+    )
     parser.add_argument("--mode", choices=["manifest", "single", "all", "consolidate"], default="all")
     parser.add_argument("--single-manifest-path", default=None)
     parser.add_argument("--single-row-index", type=int, default=None, help="1-based manifest row index for Slurm arrays.")
@@ -452,6 +498,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    yfv_donor_ids = _normalize_csv_tokens(args.yfv_donor_ids)
     if args.mode == "consolidate":
         consolidate_run_metadata(
             metadata_parts_dir=args.metadata_parts_dir,
@@ -480,7 +527,12 @@ def main():
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     grid_manifest.to_csv(manifest_path, sep="\t", index=False)
 
-    execution_manifest = build_execution_manifest(args.processed_dir, grid_size=args.grid_size)
+    execution_manifest = build_execution_manifest(
+        args.processed_dir,
+        grid_size=args.grid_size,
+        dataset_mode_filter=args.dataset_mode_filter,
+        yfv_donor_ids=yfv_donor_ids,
+    )
     execution_path = Path(args.execution_path)
     execution_path.parent.mkdir(parents=True, exist_ok=True)
     execution_manifest.to_csv(execution_path, sep="\t", index=False)

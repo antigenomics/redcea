@@ -75,6 +75,19 @@ VDBSCAN_LEIDEN_FOCUSED_GRID = {
     },
 }
 
+YFV_VDBSCAN_LEIDEN_LOWRES_GRID = {
+    "vdbscan_leiden": {
+        "cluster_min_samples": [3, 5],
+        "k_neighbors": [20],
+        "eps_k_neighbors": [8, 12, 16],
+        "eps_estimation_based_on": ["sample"],
+        "vdbscan_sym_rule": ["asymmetric"],
+        "leiden_resolution": [0.2, 0.5, 1.0],
+        "cluster_pc_components": [50],
+        "enrichment_test": ["zbinom"],
+    },
+}
+
 
 LARGE_GRID = {
     "dbscan": _paired_neighbor_grid(
@@ -139,6 +152,8 @@ def get_grid_spec(grid_size: str) -> dict[str, dict[str, list[object]]]:
         return LARGE_GRID
     if grid_size == "focused_vdbscan_leiden":
         return VDBSCAN_LEIDEN_FOCUSED_GRID
+    if grid_size == "yfv_vdbscan_leiden_lowres":
+        return YFV_VDBSCAN_LEIDEN_LOWRES_GRID
     raise KeyError("Unknown grid_size: {0}".format(grid_size))
 
 
