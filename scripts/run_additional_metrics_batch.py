@@ -49,7 +49,11 @@ def parse_args() -> argparse.Namespace:
         description="Backfill additional RedCEA metrics for all run directories and build unified metric tables."
     )
     parser.add_argument("--runs-root", default="results/redcea_runs")
-    parser.add_argument("--metadata-path", default="results/run_metadata/clustering_runs.tsv")
+    parser.add_argument(
+        "--execution-manifest",
+        default=r"C:\Users\lizzka239\Downloads\clustering_execution_manifest.tsv",
+        help="TSV manifest with run_id and parameter_json metadata.",
+    )
     parser.add_argument("--cluster-output", default="results/metrics/redcea_all_cluster_metrics.tsv")
     parser.add_argument("--run-output", default="results/metrics/redcea_all_run_metrics.tsv")
     parser.add_argument("--log-path", default="results/metrics/run_additional_metrics_batch.log")
@@ -190,18 +194,95 @@ def parse_parameter_json(value: object) -> dict[str, object]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def load_run_metadata(metadata_path: Path) -> pd.DataFrame:
-    if not metadata_path.exists():
+def load_execution_manifest(manifest_path: Path) -> pd.DataFrame:
+    if not manifest_path.exists():
+        logging.warning("Execution manifest not found: %s", manifest_path)
         return pd.DataFrame(columns=["run_id"])
-    return pd.read_csv(metadata_path, sep="\t")
+    manifest_df = pd.read_csv(manifest_path, sep="\t")
+    if "run_id" not in manifest_df.columns:
+        raise ValueError("Execution manifest must contain a run_id column: {0}".format(manifest_path))
+    return manifest_df
+
+
+def infer_run_metadata_from_name(run_id: str) -> dict[str, object]:
+    parts = run_id.split("_")
+    metadata: dict[str, object] = {
+        "dataset": None,
+        "dataset_mode": None,
+        "method": None,
+        "parameter_json": None,
+        "redcea_output_dir": None,
+    }
+    if len(parts) < 3:
+        return metadata
+
+    grid_idx = None
+    for idx, token in enumerate(parts):
+        if token == "grid":
+            grid_idx = idx
+            break
+    if grid_idx is None or grid_idx < 1:
+        return metadata
+
+    method = parts[grid_idx - 1]
+    dataset_tokens = parts[: grid_idx - 1]
+    if not dataset_tokens:
+        return metadata
+
+    if dataset_tokens[0] == "yfv":
+        metadata["dataset_mode"] = "yfv"
+        metadata["dataset"] = "_".join(dataset_tokens)
+    elif dataset_tokens[0] == "vdjdb":
+        metadata["dataset_mode"] = "vdjdb"
+        metadata["dataset"] = "_".join(dataset_tokens)
+    else:
+        metadata["dataset"] = "_".join(dataset_tokens)
+
+    metadata["method"] = method
+    return metadata
+
+
+def resolve_run_metadata(
+    *,
+    run_id: str,
+    run_dir: Path,
+    manifest_lookup: pd.DataFrame,
+) -> dict[str, object]:
+    inferred = infer_run_metadata_from_name(run_id)
+    inferred["run_id"] = run_id
+    inferred["run_dir"] = str(run_dir)
+    inferred["redcea_output_dir"] = str(run_dir)
+
+    if manifest_lookup.empty:
+        return inferred
+
+    matched = manifest_lookup.loc[manifest_lookup["run_id"].astype(str) == run_id]
+    if matched.empty:
+        return inferred
+
+    row = matched.iloc[0]
+    resolved = dict(inferred)
+    for column in matched.columns:
+        value = row[column]
+        if pd.isna(value):
+            continue
+        resolved[column] = value
+
+    if not resolved.get("dataset_mode"):
+        resolved["dataset_mode"] = inferred.get("dataset_mode")
+    if not resolved.get("dataset"):
+        resolved["dataset"] = inferred.get("dataset")
+    if not resolved.get("method"):
+        resolved["method"] = inferred.get("method")
+    resolved["redcea_output_dir"] = str(run_dir)
+    return resolved
 
 
 def collect_cluster_level_table(
     *,
     runs_root: Path,
-    metadata_df: pd.DataFrame,
+    manifest_lookup: pd.DataFrame,
 ) -> pd.DataFrame:
-    metadata_lookup = metadata_df.drop_duplicates(subset=["run_id"], keep="last") if not metadata_df.empty else metadata_df
     frames: list[pd.DataFrame] = []
 
     for run_dir in sorted(path for path in runs_root.iterdir() if path.is_dir()):
@@ -214,17 +295,27 @@ def collect_cluster_level_table(
         summary_df = pd.read_csv(summary_path, sep="\t")
         summary_df.insert(0, "run_id", run_dir.name)
         summary_df.insert(1, "run_dir", str(run_dir))
+        resolved = resolve_run_metadata(run_id=run_dir.name, run_dir=run_dir, manifest_lookup=manifest_lookup)
+        summary_df.insert(2, "dataset", resolved.get("dataset"))
+        summary_df.insert(3, "dataset_mode", resolved.get("dataset_mode"))
+        summary_df.insert(4, "method", resolved.get("method"))
+        summary_df.insert(5, "parameter_json", resolved.get("parameter_json"))
+        summary_df.insert(6, "redcea_output_dir", resolved.get("redcea_output_dir"))
+
+        extra_columns = [
+            column
+            for column in resolved.keys()
+            if column not in {"run_id", "run_dir", "dataset", "dataset_mode", "method", "parameter_json", "redcea_output_dir"}
+            and column not in summary_df.columns
+        ]
+        for column in extra_columns:
+            summary_df[column] = resolved[column]
         frames.append(summary_df)
 
     if not frames:
         return pd.DataFrame()
 
     combined = pd.concat(frames, ignore_index=True)
-    if metadata_lookup.empty:
-        return combined
-
-    metadata_cols = [column for column in metadata_lookup.columns if column != "run_id"]
-    combined = combined.merge(metadata_lookup[["run_id"] + metadata_cols], on="run_id", how="left")
     parameter_df = pd.json_normalize(combined["parameter_json"].apply(parse_parameter_json)).add_prefix("param_")
     if not parameter_df.empty:
         combined = pd.concat([combined, parameter_df], axis=1)
@@ -336,14 +427,20 @@ def progress_message(
 def main() -> int:
     args = parse_args()
     runs_root = Path(args.runs_root)
-    metadata_path = Path(args.metadata_path)
+    execution_manifest = Path(args.execution_manifest)
     cluster_output = Path(args.cluster_output)
     run_output = Path(args.run_output)
     log_path = Path(args.log_path) if args.log_path else None
 
     setup_logging(log_path)
     logging.info("Starting additional metrics batch run")
-    logging.info("runs_root=%s workers=%d rewrite_existing=%s", runs_root, args.workers, args.rewrite_existing)
+    logging.info(
+        "runs_root=%s execution_manifest=%s workers=%d rewrite_existing=%s",
+        runs_root,
+        execution_manifest,
+        args.workers,
+        args.rewrite_existing,
+    )
 
     run_dirs = sorted(path for path in runs_root.iterdir() if path.is_dir())
     total = len(run_dirs)
@@ -413,8 +510,18 @@ def main() -> int:
     atomic_write_tsv(result_df, result_manifest_path)
     logging.info("Wrote worker manifest: %s", result_manifest_path)
 
-    metadata_df = load_run_metadata(metadata_path)
-    cluster_level_df = collect_cluster_level_table(runs_root=runs_root, metadata_df=metadata_df)
+    manifest_df = load_execution_manifest(execution_manifest)
+    manifest_run_ids = set(manifest_df["run_id"].astype(str)) if not manifest_df.empty else set()
+    existing_run_ids = {run_dir.name for run_dir in run_dirs}
+    matched_runs = len(existing_run_ids & manifest_run_ids)
+    logging.info(
+        "Manifest coverage over existing runs: matched=%d missing=%d total_runs=%d",
+        matched_runs,
+        len(existing_run_ids - manifest_run_ids),
+        len(existing_run_ids),
+    )
+
+    cluster_level_df = collect_cluster_level_table(runs_root=runs_root, manifest_lookup=manifest_df)
     run_level_df = build_run_level_table(cluster_level_df)
     atomic_write_tsv(cluster_level_df, cluster_output)
     atomic_write_tsv(run_level_df, run_output)
