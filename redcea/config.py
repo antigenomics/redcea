@@ -38,6 +38,7 @@ class PipelineConfig:
     enrichment_test: str
     debug_save_intermediate: bool
     debug_output_dir: str | None
+    add_auxiliary_cluster_metrics: bool
 
     @classmethod
     def from_args(cls, args: Any) -> "PipelineConfig":
@@ -72,6 +73,7 @@ class PipelineConfig:
             enrichment_test=getattr(args, "enrichment_test", "zbinom"),
             debug_save_intermediate=getattr(args, "debug_save_intermediate", False),
             debug_output_dir=getattr(args, "debug_output_dir", None),
+            add_auxiliary_cluster_metrics=getattr(args, "add_auxiliary_cluster_metrics", False),
         )
 
     @property
