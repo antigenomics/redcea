@@ -137,6 +137,12 @@ def add_redcea_pipeline_args(parser: argparse.ArgumentParser) -> argparse.Argume
         default=None,
         help="Optional custom directory for debug artifacts. Defaults to <output>/debug.",
     )
+    parser.add_argument(
+        "--add-auxiliary-cluster-metrics",
+        dest="add_auxiliary_cluster_metrics",
+        action="store_true",
+        help="Append auxiliary support-aware enrichment and density-validity metrics to the cluster summary.",
+    )
     return parser
 
 def build_enrich_parser() -> argparse.ArgumentParser:

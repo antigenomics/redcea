@@ -171,3 +171,28 @@ cython_debug/
 .tmp/
 bench_redcea_compare/
 *.code-workspace
+
+# Local analysis outputs
+data/processed/
+figures/
+reports/
+
+# Local exploratory notebooks
+notebooks/vdjdb/8_vdjdb_valid_metrics_plots_olga.ipynb
+notebooks/vdjdb/9_knn_distance_distributions_glc_ylq.ipynb
+notebooks/vdjdb/10_vdbscan_group_kdistance_glc_ylq.ipynb
+
+# Derived benchmark outputs
+results/clustering_assignments/
+results/density/
+results/enrichment/
+results/knn_distance_distributions/
+results/run_metadata/
+results/metrics/.gitkeep
+results/metrics/*.tsv
+results/redcea_runs/**/knn_*.distances.npy
+results/redcea_runs/**/knn_*.indices.npy
+results/redcea_runs/**/knn_*.meta.json
+results/redcea_runs/**/*_enriched_clonotypes_tcremp.tsv
+results/redcea_runs/**/*_summary_tcrempnet.tsv
+results/redcea_runs/**/*_tcremp_clusters.tsv
