@@ -86,10 +86,7 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
         leiden_sub_resolution=1.0,
         eps_estimation_based_on="sample",
         vdbscan_sym_rule="asymmetric",
-        enrichment_test="zbinom",
-        debug_save_intermediate=False,
-        debug_output_dir=None,
-        add_auxiliary_cluster_metrics=True,
+        enrichment_test="binom",
     )
 
     monkeypatch.setattr(pipeline, "configure_logging", lambda *args, **kwargs: None)
@@ -140,34 +137,8 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
         "build_joint_knn_artifacts",
         lambda **kwargs: types.SimpleNamespace(
             data_reduced=np.zeros((5, 2), dtype="float32"),
-            distances=np.array(
-                [
-                    [0.0, 0.1],
-                    [0.0, 0.1],
-                    [0.0, 0.3],
-                    [0.0, 0.1],
-                    [0.0, 0.3],
-                ],
-                dtype="float32",
-            ),
-            indices=np.array(
-                [
-                    [0, 1],
-                    [1, 0],
-                    [2, 4],
-                    [3, 0],
-                    [4, 2],
-                ],
-                dtype="int32",
-            ),
-            ind_ss=np.array(
-                [
-                    [0, 1],
-                    [1, 0],
-                    [2, 1],
-                ],
-                dtype="int32",
-            ),
+            distances=np.zeros((5, 2), dtype="float32"),
+            indices=np.zeros((5, 2), dtype="int32"),
             dist_ss=np.zeros((3, 2), dtype="float32"),
             dist_bb=np.zeros((2, 2), dtype="float32"),
         ),
@@ -206,8 +177,6 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
     assert not artifacts.summary_df.empty
     assert set(clusters["source"]) == {"sample", "background"}
     assert {"cluster_id", "cluster_size", "sample", "background", "log_fold_change"} <= set(summary.columns)
-    assert "enrichment_pvalue_zbinom" in summary.columns
-    assert "enrichment_fdr_zbinom" in summary.columns
-    assert "log2fc_smooth" in summary.columns
-    assert "density_validity" in summary.columns
+    assert "enrichment_pvalue_binom" in summary.columns
+    assert "enrichment_fdr_binom" in summary.columns
     assert not enriched.empty

@@ -19,7 +19,6 @@ from redcea.analysis.io import (
     load_embedding_artifacts,
     save_pipeline_outputs,
 )
-from redcea.auxiliary_cluster_metrics import append_auxiliary_cluster_metrics
 from redcea.clustering import build_joint_knn_artifacts, run_joint_clustering
 from redcea.clustering.cluster_methods import (
     JointDbscanDebugArtifacts,
@@ -197,8 +196,6 @@ def build_pipeline_artifacts(
     joint_representations: pd.DataFrame,
     sample_ids: pd.Series,
     background_ids: pd.Series,
-    sample_knn_indices=None,
-    sample_knn_distances=None,
 ) -> PipelineArtifacts:
     log_memory_usage("After clustering")
 
@@ -215,17 +212,6 @@ def build_pipeline_artifacts(
         total_background=len(background_ids),
     )
     summary_df = add_log_fold_change(summary_df, total_sample=len(sample_ids), total_background=len(background_ids))
-    if config.add_auxiliary_cluster_metrics:
-        if config.enrichment_test != "zbinom":
-            raise ValueError("Auxiliary cluster metrics currently require --enrichment-test zbinom.")
-        summary_df = append_auxiliary_cluster_metrics(
-            summary_df,
-            cluster_df,
-            total_sample=len(sample_ids),
-            total_background=len(background_ids),
-            sample_knn_indices=sample_knn_indices,
-            sample_knn_distances=sample_knn_distances,
-        )
     pvalue_col, fdr_col = get_enrichment_column_names(config.enrichment_test)
 
     enriched_clusters = summary_df.loc[
@@ -347,8 +333,6 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
         joint_representations=joint_representations,
         sample_ids=sample_artifacts.ids,
         background_ids=background_artifacts.ids,
-        sample_knn_indices=clustering_outputs.knn.ind_ss,
-        sample_knn_distances=clustering_outputs.knn.dist_ss,
     )
     if config.debug_save_intermediate:
         _save_debug_outputs(

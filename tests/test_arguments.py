@@ -24,4 +24,3 @@ def test_build_enrich_parser_parses_required_arguments():
     assert args.cluster_algo == "vdbscan"
     assert args.k_neighbors == 4
     assert args.enrichment_test == "zbinom"
-    assert args.add_auxiliary_cluster_metrics is False
