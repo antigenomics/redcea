@@ -128,19 +128,17 @@ def save_pipeline_outputs(
     artifacts.cluster_df.to_csv(output_path / f"{prefix}_tcremp_clusters.tsv", sep="\t", index=False)
     logging.info("Saved cluster assignments.")
 
-    summary_columns = [
-        "cluster_id",
-        "cluster_size",
-        "sample",
-        "background",
-        pvalue_col,
-        fdr_col,
-        "log_fold_change",
-    ]
-    trailing_columns = [column for column in artifacts.summary_df.columns if column not in summary_columns]
-    artifacts.summary_df[summary_columns + trailing_columns].to_csv(
-        output_path / f"{prefix}_summary_tcrempnet.tsv", sep="\t", index=False
-    )
+    artifacts.summary_df[
+        [
+            "cluster_id",
+            "cluster_size",
+            "sample",
+            "background",
+            pvalue_col,
+            fdr_col,
+            "log_fold_change",
+        ]
+    ].to_csv(output_path / f"{prefix}_summary_tcrempnet.tsv", sep="\t", index=False)
     logging.info("Saved cluster summary with p-values.")
 
     artifacts.enriched_clonotypes_df.to_csv(
