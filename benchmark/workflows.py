@@ -179,10 +179,12 @@ def load_assignment_tables(
     return assignments, selected_metadata
 
 
-def _load_metadata_lookup(metadata_paths: list[Path]) -> pd.DataFrame:
+def _load_metadata_lookup(metadata_paths: list[Path | None]) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     seen_paths: set[Path] = set()
     for path in metadata_paths:
+        if path is None:
+            continue
         resolved = Path(path)
         if resolved in seen_paths or not resolved.exists():
             continue
@@ -203,7 +205,6 @@ def _compute_vdjdb_metrics_from_redcea_runs(
     *,
     assignments_dir: str | Path,
     redcea_runs_dir: str | Path,
-    metadata_path: str | Path,
     tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
     padj_threshold: float = DEFAULT_TCRVDB_PADJ_THRESHOLD,
     columns: list[str] | None = ASSIGNMENT_EVAL_COLUMNS,
@@ -212,11 +213,6 @@ def _compute_vdjdb_metrics_from_redcea_runs(
     assignments_root = repo_path(assignments_dir)
     assignments_root.mkdir(parents=True, exist_ok=True)
     redcea_runs_root = repo_path(redcea_runs_dir)
-    metadata_out = repo_path(metadata_path)
-    repaired_metadata_path = repo_path("results/run_metadata/clustering_runs_vdjdb_repaired.tsv")
-    default_metadata_path = repo_path("results/run_metadata/clustering_runs.tsv")
-    metadata_lookup = _load_metadata_lookup([metadata_out, default_metadata_path, repaired_metadata_path])
-    metadata_by_run = metadata_lookup.set_index("run_id", drop=False) if len(metadata_lookup) else pd.DataFrame()
     truth_table = build_vdjdb_truth_table(tcrvdb_path, padj_threshold=padj_threshold)
 
     rows: list[dict[str, object]] = []
@@ -247,12 +243,11 @@ def _compute_vdjdb_metrics_from_redcea_runs(
             log_step("Skipping VDJdb run with unparseable run_id={0}: {1}".format(run_id, exc))
             continue
 
-        metadata_row = metadata_by_run.loc[run_id] if len(metadata_by_run) and run_id in metadata_by_run.index else {}
-        dataset = str(metadata_row.get("dataset", run_info["dataset"]))
-        dataset_mode = str(metadata_row.get("dataset_mode", run_info["dataset_mode"]))
-        method = str(metadata_row.get("method", run_info["method"]))
-        parameter_json = str(metadata_row.get("parameter_json", "{}"))
-        runtime_seconds = float(metadata_row.get("runtime_seconds", np.nan))
+        dataset = str(run_info["dataset"])
+        dataset_mode = str(run_info["dataset_mode"])
+        method = str(run_info["method"])
+        parameter_json = "{}"
+        runtime_seconds = float(np.nan)
         assignment_path = assignments_root / "{0}.parquet".format(run_id)
 
         if assignment_path.exists():
@@ -611,7 +606,7 @@ def run_vdjdb_evaluation(
     *,
     assignments_dir: str | Path = "results/clustering_assignments",
     metadata_parts_dir: str | Path = "results/run_metadata/clustering_run_parts",
-    metadata_path: str | Path = "results/run_metadata/clustering_runs.tsv",
+    metadata_path: str | Path | None = None,
     redcea_runs_dir: str | Path = "results/redcea_runs",
     metrics_path: str | Path = "results/metrics/vdjdb_clustering_metrics.tsv",
     fig2_stem: str | Path = "figures/clustering_strategy/fig2_vdjdb_f1_precision_recall",
@@ -623,11 +618,10 @@ def run_vdjdb_evaluation(
     metrics_df = _compute_vdjdb_metrics_from_redcea_runs(
         assignments_dir=assignments_dir,
         redcea_runs_dir=redcea_runs_dir,
-        metadata_path=metadata_path,
         tcrvdb_path=tcrvdb_path,
         padj_threshold=padj_threshold,
     )
-    if metrics_df.empty and not repo_path(redcea_runs_dir).exists():
+    if metrics_df.empty and metadata_path is not None and not repo_path(redcea_runs_dir).exists():
         log_step(
             "Falling back to metadata-based VDJdb loading because redcea_runs is unavailable: {0}".format(
                 repo_path(redcea_runs_dir)
@@ -646,6 +640,8 @@ def run_vdjdb_evaluation(
         else:
             vdjdb_assignments = assignments.loc[assignments["dataset_mode"] == "vdjdb"].copy()
             metrics_df = compute_vdjdb_metrics(vdjdb_assignments, run_metadata)
+    elif metrics_df.empty and metadata_path is None and not repo_path(redcea_runs_dir).exists():
+        log_step("Skipping metadata fallback because metadata_path was not provided and redcea_runs is unavailable.")
     if metrics_df.empty:
         metrics_df = pd.DataFrame()
         metrics_path = repo_path(metrics_path)
