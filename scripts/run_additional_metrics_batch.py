@@ -397,6 +397,29 @@ def numeric_summary(values: pd.Series) -> dict[str, float]:
     }
 
 
+def _enriched_cluster_mask(frame: pd.DataFrame) -> pd.Series:
+    if not {"log_fold_change", "enrichment_fdr_zbinom"}.issubset(frame.columns):
+        return pd.Series(False, index=frame.index, dtype=bool)
+    return (
+        (pd.to_numeric(frame["log_fold_change"], errors="coerce") > 0)
+        & (pd.to_numeric(frame["enrichment_fdr_zbinom"], errors="coerce") < 0.05)
+        & (pd.to_numeric(frame["cluster_id"], errors="coerce") != -1)
+    )
+
+
+def _non_noise_cluster_mask(frame: pd.DataFrame) -> pd.Series:
+    if "cluster_id" not in frame.columns:
+        return pd.Series(True, index=frame.index, dtype=bool)
+    return pd.to_numeric(frame["cluster_id"], errors="coerce") != -1
+
+
+def _mean_median(values: pd.Series) -> tuple[float, float]:
+    numeric = pd.to_numeric(values, errors="coerce")
+    if numeric.notna().sum() == 0:
+        return np.nan, np.nan
+    return float(numeric.mean()), float(numeric.median())
+
+
 def build_run_level_table(cluster_df: pd.DataFrame) -> pd.DataFrame:
     if cluster_df.empty:
         return pd.DataFrame()
@@ -435,6 +458,57 @@ def build_run_level_table(cluster_df: pd.DataFrame) -> pd.DataFrame:
         for column in metadata_like_columns:
             row[column] = frame.iloc[0][column]
         row["n_clusters_in_summary"] = int(len(frame))
+        non_noise_mask = _non_noise_cluster_mask(frame)
+        enriched_mask = _enriched_cluster_mask(frame)
+        all_clusters = frame.loc[non_noise_mask].copy()
+        enriched_clusters = frame.loc[enriched_mask].copy()
+
+        row["n_clusters_total"] = int(len(all_clusters))
+        row["n_clusters_enriched"] = int(len(enriched_clusters))
+
+        cluster_size_all_mean, cluster_size_all_median = _mean_median(all_clusters.get("cluster_size", pd.Series(dtype=float)))
+        cluster_size_enriched_mean, cluster_size_enriched_median = _mean_median(
+            enriched_clusters.get("cluster_size", pd.Series(dtype=float))
+        )
+        row["cluster_size_all__mean"] = cluster_size_all_mean
+        row["cluster_size_all__median"] = cluster_size_all_median
+        row["cluster_size_enriched__mean"] = cluster_size_enriched_mean
+        row["cluster_size_enriched__median"] = cluster_size_enriched_median
+
+        sample_fraction_all = pd.Series(dtype=float)
+        sample_fraction_enriched = pd.Series(dtype=float)
+        if {"sample", "background"}.issubset(frame.columns):
+            all_cluster_size = pd.to_numeric(all_clusters["sample"], errors="coerce") + pd.to_numeric(
+                all_clusters["background"], errors="coerce"
+            )
+            enriched_cluster_size = pd.to_numeric(enriched_clusters["sample"], errors="coerce") + pd.to_numeric(
+                enriched_clusters["background"], errors="coerce"
+            )
+            sample_fraction_all = pd.Series(
+                np.where(
+                    all_cluster_size > 0,
+                    pd.to_numeric(all_clusters["sample"], errors="coerce") / all_cluster_size,
+                    np.nan,
+                ),
+                index=all_clusters.index,
+                dtype="float64",
+            )
+            sample_fraction_enriched = pd.Series(
+                np.where(
+                    enriched_cluster_size > 0,
+                    pd.to_numeric(enriched_clusters["sample"], errors="coerce") / enriched_cluster_size,
+                    np.nan,
+                ),
+                index=enriched_clusters.index,
+                dtype="float64",
+            )
+        sample_fraction_all_mean, sample_fraction_all_median = _mean_median(sample_fraction_all)
+        sample_fraction_enriched_mean, sample_fraction_enriched_median = _mean_median(sample_fraction_enriched)
+        row["sample_fraction_all__mean"] = sample_fraction_all_mean
+        row["sample_fraction_all__median"] = sample_fraction_all_median
+        row["sample_fraction_enriched__mean"] = sample_fraction_enriched_mean
+        row["sample_fraction_enriched__median"] = sample_fraction_enriched_median
+
         if "is_good_candidate" in frame.columns:
             row["good_candidate_count"] = int(frame["is_good_candidate"].fillna(False).astype(bool).sum())
             row["good_candidate_fraction"] = float(frame["is_good_candidate"].fillna(False).astype(float).mean())

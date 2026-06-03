@@ -20,6 +20,8 @@ AUXILIARY_CLUSTER_METRIC_COLUMNS = [
     "external_edges_n",
     "external_mreach_q10",
     "separation",
+    "density_validity_full",
+    "density_validity_enriched_only",
     "density_validity",
     "has_density_validity",
     "is_sample_knn_closed",
@@ -39,6 +41,8 @@ _GEOMETRY_COLUMNS = [
     "external_edges_n",
     "external_mreach_q10",
     "separation",
+    "density_validity_full",
+    "density_validity_enriched_only",
     "density_validity",
     "geometry_score",
 ]
@@ -75,7 +79,7 @@ def append_auxiliary_cluster_metrics(
 
     geometry_df = _compute_geometry_metrics(
         cluster_df=prepared_cluster_df,
-        cluster_ids=summary["cluster_id"].to_numpy(dtype=np.int64, copy=False),
+        summary_df=summary,
         sample_knn_indices=sample_knn_indices,
         sample_knn_distances=sample_knn_distances,
     )
@@ -151,10 +155,11 @@ def _append_enrichment_metrics(
 def _compute_geometry_metrics(
     *,
     cluster_df: pd.DataFrame,
-    cluster_ids: np.ndarray,
+    summary_df: pd.DataFrame,
     sample_knn_indices: np.ndarray | None,
     sample_knn_distances: np.ndarray | None,
 ) -> pd.DataFrame:
+    cluster_ids = summary_df["cluster_id"].to_numpy(dtype=np.int64, copy=False)
     geometry = _empty_geometry_frame(cluster_ids)
     sample_df = cluster_df.loc[cluster_df["source"] == "sample"].reset_index(drop=True)
     if sample_knn_indices is None or sample_knn_distances is None or sample_df.empty:
@@ -199,6 +204,34 @@ def _compute_geometry_metrics(
 
     edge_mreach = np.maximum.reduce([core_dist[src_idx], core_dist[tgt_idx], edge_dist])
 
+    geometry = _populate_geometry_stats(
+        geometry_df=geometry,
+        src_cluster=src_cluster,
+        tgt_cluster=tgt_cluster,
+        edge_mreach=edge_mreach,
+    )
+
+    enriched_cluster_ids = _get_enriched_cluster_ids(summary_df)
+    enriched_only = _compute_enriched_only_density_validity(
+        cluster_ids=cluster_ids,
+        enriched_cluster_ids=enriched_cluster_ids,
+        src_cluster=src_cluster,
+        tgt_cluster=tgt_cluster,
+        edge_mreach=edge_mreach,
+    )
+    geometry["density_validity_full"] = geometry["density_validity"]
+    geometry["density_validity_enriched_only"] = enriched_only
+    return geometry
+
+
+def _populate_geometry_stats(
+    *,
+    geometry_df: pd.DataFrame,
+    src_cluster: np.ndarray,
+    tgt_cluster: np.ndarray,
+    edge_mreach: np.ndarray,
+) -> pd.DataFrame:
+    geometry = geometry_df.copy()
     internal_mask = src_cluster == tgt_cluster
     external_mask = src_cluster != tgt_cluster
 
@@ -235,11 +268,23 @@ def _compute_geometry_metrics(
 
     geometry["cohesion"] = geometry["internal_mreach_q90"]
     geometry["separation"] = geometry["external_mreach_q10"]
+    geometry["density_validity"] = _compute_density_validity(
+        cohesion=geometry["cohesion"],
+        separation=geometry["separation"],
+    )
+    geometry["geometry_score"] = geometry["density_validity"].clip(lower=0)
+    return geometry
 
-    cohesion = geometry["cohesion"].astype("float64")
-    separation = geometry["separation"].astype("float64")
+
+def _compute_density_validity(
+    *,
+    cohesion: pd.Series,
+    separation: pd.Series,
+) -> pd.Series:
+    cohesion = cohesion.astype("float64")
+    separation = separation.astype("float64")
     denom = np.maximum(cohesion, separation)
-    density_validity = pd.Series(np.nan, index=geometry.index, dtype="float64")
+    density_validity = pd.Series(np.nan, index=cohesion.index, dtype="float64")
 
     finite_mask = cohesion.notna() & separation.notna()
     positive_denom = finite_mask & (denom > 0)
@@ -249,10 +294,53 @@ def _compute_geometry_metrics(
         (separation.loc[positive_denom] - cohesion.loc[positive_denom]) / denom.loc[positive_denom]
     )
     density_validity.loc[zero_denom] = 0.0
+    return density_validity
 
-    geometry["density_validity"] = density_validity
-    geometry["geometry_score"] = geometry["density_validity"].clip(lower=0)
-    return geometry
+
+def _get_enriched_cluster_ids(summary_df: pd.DataFrame) -> pd.Index:
+    enriched_mask = (
+        (summary_df["log_fold_change"].astype("float64") > 0)
+        & (summary_df["enrichment_fdr_zbinom"].astype("float64") < _FDR_THRESHOLD)
+        & (summary_df["cluster_id"].astype("int64") != _NOISE_CLUSTER_ID)
+    )
+    return pd.Index(summary_df.loc[enriched_mask, "cluster_id"].astype("int64").unique(), dtype="int64")
+
+
+def _compute_enriched_only_density_validity(
+    *,
+    cluster_ids: np.ndarray,
+    enriched_cluster_ids: pd.Index,
+    src_cluster: np.ndarray,
+    tgt_cluster: np.ndarray,
+    edge_mreach: np.ndarray,
+) -> pd.Series:
+    enriched_only = pd.Series(np.nan, index=np.arange(len(cluster_ids)), dtype="float64")
+    if len(enriched_cluster_ids) < 2:
+        return enriched_only
+
+    enriched_set = set(enriched_cluster_ids.tolist())
+    src_enriched = np.isin(src_cluster, enriched_cluster_ids.to_numpy(dtype=np.int64, copy=False))
+    tgt_enriched = np.isin(tgt_cluster, enriched_cluster_ids.to_numpy(dtype=np.int64, copy=False))
+    relevant_edges = src_enriched & tgt_enriched
+    if not np.any(relevant_edges):
+        return enriched_only
+
+    enriched_geometry = _empty_geometry_frame(enriched_cluster_ids.to_numpy(dtype=np.int64, copy=False))
+    enriched_geometry = _populate_geometry_stats(
+        geometry_df=enriched_geometry,
+        src_cluster=src_cluster[relevant_edges],
+        tgt_cluster=tgt_cluster[relevant_edges],
+        edge_mreach=edge_mreach[relevant_edges],
+    )
+    valid_count = int(enriched_geometry["density_validity"].notna().sum())
+    if valid_count < 2:
+        return enriched_only
+
+    density_by_cluster = enriched_geometry.set_index("cluster_id")["density_validity"]
+    for idx, cluster_id in enumerate(cluster_ids):
+        if int(cluster_id) in enriched_set:
+            enriched_only.iloc[idx] = density_by_cluster.get(int(cluster_id), np.nan)
+    return enriched_only
 
 
 def _summarize_cluster_mreach(
@@ -327,6 +415,8 @@ def _empty_geometry_frame(cluster_ids: np.ndarray) -> pd.DataFrame:
     geometry["external_edges_n"] = 0
     geometry["external_mreach_q10"] = np.nan
     geometry["separation"] = np.nan
+    geometry["density_validity_full"] = np.nan
+    geometry["density_validity_enriched_only"] = np.nan
     geometry["density_validity"] = np.nan
     geometry["geometry_score"] = np.nan
     return geometry
