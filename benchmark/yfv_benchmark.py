@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
@@ -15,7 +14,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from benchmark.airr_utils import read_airr_like_table, standardize_metadata_frame, to_tcremp_airr_frame
-from benchmark.grids import get_enabled_methods, get_method_grid
 from benchmark.run_benchmark import build_execution_manifest, build_grid_manifest, consolidate_run_metadata, execute_manifest
 from benchmark.workflows import load_assignment_tables, log_step
 from scripts.run_additional_metrics_batch import collect_cluster_level_table, select_run_dirs
@@ -210,23 +208,8 @@ def _normalize_chain_name(value: object, default: str = "TRB") -> str:
     return default
 
 
-def _grid_definition(config: dict[str, object]) -> dict[str, list[object]]:
-    grid = config.get("grid")
-    if isinstance(grid, dict):
-        return {str(key): list(value) for key, value in grid.items()}
-    return {
-        "algorithm": ["vdbscan_leiden"],
-        "k_neighbors": [8, 12, 16],
-        "eps_k_neighbors": [4, 8, 12],
-        "core_min_samples": [3],
-        "leiden_resolution": [0.25, 0.5, 1.0],
-        "eps_mode": ["sample"],
-        "sym_rule": ["asymmetric"],
-    }
-
-
-def validate_grid_config(config: dict[str, object]) -> dict[str, object]:
-    grid = _grid_definition(config)
+def validate_grid_config(config: dict[str, object]) -> list[tuple[int, int]]:
+    grid = dict(config.get("grid", {}))
     algorithms = [str(value) for value in grid.get("algorithm", ["vdbscan_leiden"])]
     if algorithms != ["vdbscan_leiden"]:
         raise ValueError("This YFV benchmark wrapper currently supports only `vdbscan_leiden`.")
@@ -246,14 +229,7 @@ def validate_grid_config(config: dict[str, object]) -> dict[str, object]:
         raise ValueError("Current YFV benchmark expects `eps_mode` to contain only `sample`.")
     if sym_rule != ["asymmetric"]:
         raise ValueError("Current YFV benchmark expects `sym_rule` to contain only `asymmetric`.")
-
-    invalid_pairs = [(k_value, eps_value) for k_value in k_neighbors for eps_value in eps_k_neighbors if eps_value > k_value]
-    return {
-        "invalid_pairs": invalid_pairs,
-        "k_neighbors": k_neighbors,
-        "eps_k_neighbors": eps_k_neighbors,
-        "leiden_resolution": leiden_resolution,
-    }
+    return [(k_value, eps_value) for k_value in k_neighbors for eps_value in eps_k_neighbors if eps_value > k_value]
 
 
 def _rename_source_columns(frame: pd.DataFrame, columns_cfg: dict[str, object], chain_default: str) -> pd.DataFrame:
@@ -364,7 +340,7 @@ def compute_overlap_fraction(values_a: set[str], values_b: set[str]) -> float:
 
 def prepare_yfv_inputs(config_path: str | Path, outdir: str | Path, *, dry_run: bool = False) -> dict[str, object]:
     config = load_benchmark_config(config_path)
-    validation = validate_grid_config(config)
+    invalid_pairs = validate_grid_config(config)
     paths = ensure_output_dirs(outdir)
     chain_default = _normalize_chain_name(config.get("dataset", {}).get("chain", "TRB"))
     columns_cfg = dict(config.get("columns", {}))
@@ -413,11 +389,7 @@ def prepare_yfv_inputs(config_path: str | Path, outdir: str | Path, *, dry_run: 
                 "background_airr_path": str(normalized_pre if normalized_pre.exists() else pre_path),
                 "sample_embedding_path": str(donor_cfg.get("post_embedding", "")),
                 "background_embedding_path": str(donor_cfg.get("pre_embedding", "")),
-                "sample_index_path": str(donor_cfg.get("post_index", "")),
-                "background_index_path": str(donor_cfg.get("pre_index", "")),
                 "background_kind": "paired_pre_vaccination_repertoire",
-                "source_pre_airr_path": str(pre_path),
-                "source_post_airr_path": str(post_path),
             }
         )
 
@@ -426,9 +398,9 @@ def prepare_yfv_inputs(config_path: str | Path, outdir: str | Path, *, dry_run: 
     llw_reference = _load_llw_reference(config, allow_missing=dry_run)
     llw_reference.to_csv(paths.llw_reference_path, sep="\t", index=False)
     log_step("Prepared YFV dataset manifest rows={0}: {1}".format(len(dataset_manifest), paths.dataset_manifest_path))
-    if validation["invalid_pairs"]:
+    if invalid_pairs:
         warnings.append(
-            "Grid contains invalid eps/k pairs and they will be filtered by the named grid: {0}".format(validation["invalid_pairs"])
+            "Grid contains invalid eps/k pairs and they will be filtered by the named grid: {0}".format(invalid_pairs)
         )
     return {
         "dataset_manifest_path": paths.dataset_manifest_path,
@@ -491,9 +463,8 @@ def _load_execution_manifest(paths: BenchmarkPaths) -> pd.DataFrame:
     return manifest
 
 
-def _load_clustering_outputs(paths: BenchmarkPaths) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def _load_assignments_and_manifest(paths: BenchmarkPaths) -> tuple[pd.DataFrame, pd.DataFrame]:
     manifest = _load_execution_manifest(paths)
-    run_metadata = pd.read_csv(paths.run_metadata_path, sep="\t") if paths.run_metadata_path.exists() else pd.DataFrame()
     assignments, _ = load_assignment_tables(
         assignments_dir=paths.assignments_dir,
         metadata_parts_dir=paths.run_metadata_parts_dir,
@@ -502,7 +473,7 @@ def _load_clustering_outputs(paths: BenchmarkPaths) -> tuple[pd.DataFrame, pd.Da
         dataset_mode="yfv",
         consolidate_metadata=False,
     )
-    return manifest, run_metadata, assignments
+    return manifest, assignments
 
 
 def _empty_frame(columns: list[str]) -> pd.DataFrame:
@@ -524,7 +495,7 @@ def _load_cluster_metrics(paths: BenchmarkPaths, manifest: pd.DataFrame) -> pd.D
 def annotate_yfv_llw(config_path: str | Path, outdir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     config = load_benchmark_config(config_path)
     paths = ensure_output_dirs(outdir)
-    manifest, _run_metadata, assignments = _load_clustering_outputs(paths)
+    manifest, assignments = _load_assignments_and_manifest(paths)
     cluster_metrics = _load_cluster_metrics(paths, manifest)
 
     if assignments.empty or cluster_metrics.empty:
@@ -656,7 +627,6 @@ def _run_fragmentation_metrics(cluster_summary: pd.DataFrame) -> tuple[float, fl
 
 
 def summarize_yfv_benchmark(config_path: str | Path, outdir: str | Path) -> dict[str, pd.DataFrame]:
-    _config = load_benchmark_config(config_path)
     paths = ensure_output_dirs(outdir)
     if not paths.cluster_summary_path.exists() or not paths.clonotype_match_path.exists():
         annotate_yfv_llw(config_path, outdir)
@@ -790,7 +760,6 @@ def summarize_yfv_benchmark(config_path: str | Path, outdir: str | Path) -> dict
 
 
 def compute_yfv_overlap(config_path: str | Path, outdir: str | Path) -> pd.DataFrame:
-    _config = load_benchmark_config(config_path)
     paths = ensure_output_dirs(outdir)
     if not paths.clonotype_match_path.exists() or not paths.cluster_summary_path.exists():
         annotate_yfv_llw(config_path, outdir)
@@ -1080,7 +1049,6 @@ def write_yfv_benchmark_summary(config_path: str | Path, outdir: str | Path) -> 
     paths = ensure_output_dirs(outdir)
     config_summary = pd.read_csv(paths.config_summary_path, sep="\t") if paths.config_summary_path.exists() else pd.DataFrame()
     donor_run_summary = pd.read_csv(paths.donor_run_summary_path, sep="\t") if paths.donor_run_summary_path.exists() else pd.DataFrame()
-    best_config_summary = pd.read_csv(paths.best_config_summary_path, sep="\t") if paths.best_config_summary_path.exists() else pd.DataFrame()
     run_metadata = pd.read_csv(paths.run_metadata_path, sep="\t") if paths.run_metadata_path.exists() else pd.DataFrame()
     selected_config = _selected_config(config_summary)
 

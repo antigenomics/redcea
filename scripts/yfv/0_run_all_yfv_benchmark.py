@@ -16,7 +16,6 @@ from benchmark.yfv_benchmark import (
     run_yfv_redcea_grid,
     summarize_yfv_benchmark,
     compute_yfv_overlap,
-    update_config_summaries,
     write_yfv_benchmark_summary,
     annotate_yfv_llw,
 )
@@ -40,7 +39,6 @@ def main() -> int:
     annotate_yfv_llw(args.config, args.outdir)
     summarize_yfv_benchmark(args.config, args.outdir)
     compute_yfv_overlap(args.config, args.outdir)
-    update_config_summaries(args.outdir)
     plot_yfv_benchmark(args.config, args.outdir)
     write_yfv_benchmark_summary(args.config, args.outdir)
     return 0

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Thin wrapper around benchmark.yfv_benchmark.summarize_yfv_benchmark and config rollups."""
+"""Thin wrapper around benchmark.yfv_benchmark.summarize_yfv_benchmark."""
 
 import argparse
 import sys
@@ -10,7 +10,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from benchmark.yfv_benchmark import summarize_yfv_benchmark, update_config_summaries
+from benchmark.yfv_benchmark import summarize_yfv_benchmark
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,7 +23,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     summarize_yfv_benchmark(args.config, args.outdir)
-    update_config_summaries(args.outdir)
     return 0
 
 
