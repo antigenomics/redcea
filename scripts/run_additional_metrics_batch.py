@@ -168,6 +168,8 @@ def process_single_run(run_dir_str: str, rewrite_existing: bool) -> dict[str, ob
         total_sample, total_background = infer_source_counts(cluster_df)
         sample_knn_indices = load_first_npy(run_dir, "knn_sample_sample__*.indices.npy")
         sample_knn_distances = load_first_npy(run_dir, "knn_sample_sample__*.distances.npy")
+        background_knn_indices = load_first_npy(run_dir, "knn_bg_bg__*.indices.npy")
+        background_knn_distances = load_first_npy(run_dir, "knn_bg_bg__*.distances.npy")
 
         extended_df = append_auxiliary_cluster_metrics(
             summary_df=summary_df,
@@ -176,6 +178,8 @@ def process_single_run(run_dir_str: str, rewrite_existing: bool) -> dict[str, ob
             total_background=total_background,
             sample_knn_indices=sample_knn_indices,
             sample_knn_distances=sample_knn_distances,
+            background_knn_indices=background_knn_indices,
+            background_knn_distances=background_knn_distances,
         )
         atomic_write_tsv(extended_df, summary_path)
         result["status"] = "ok"

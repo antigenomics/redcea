@@ -82,6 +82,28 @@ def test_append_auxiliary_cluster_metrics_adds_support_and_density_scores():
         ],
         dtype=np.float32,
     )
+    background_knn_indices = np.array(
+        [
+            [0, 1, 2],
+            [1, 0, 3],
+            [2, 3, 0],
+            [3, 2, 1],
+            [4, 5, 0],
+            [5, 4, 1],
+        ],
+        dtype=np.int32,
+    )
+    background_knn_distances = np.array(
+        [
+            [0.0, 0.12, 0.22],
+            [0.0, 0.12, 0.24],
+            [0.0, 0.11, 0.30],
+            [0.0, 0.11, 0.28],
+            [0.0, 0.09, 0.70],
+            [0.0, 0.09, 0.72],
+        ],
+        dtype=np.float32,
+    )
 
     result = append_auxiliary_cluster_metrics(
         summary_df,
@@ -90,6 +112,8 @@ def test_append_auxiliary_cluster_metrics_adds_support_and_density_scores():
         total_background=6,
         sample_knn_indices=sample_knn_indices,
         sample_knn_distances=sample_knn_distances,
+        background_knn_indices=background_knn_indices,
+        background_knn_distances=background_knn_distances,
     )
 
     for column in AUXILIARY_CLUSTER_METRIC_COLUMNS:
@@ -100,6 +124,12 @@ def test_append_auxiliary_cluster_metrics_adds_support_and_density_scores():
     cluster30 = result.loc[result["cluster_id"] == 30].iloc[0]
     cluster40 = result.loc[result["cluster_id"] == 40].iloc[0]
 
+    assert np.isclose(cluster10["sample_nearest_neighbor_distance"], 0.10)
+    assert np.isnan(cluster10["background_nearest_neighbor_distance"])
+    assert np.isnan(cluster20["background_nearest_neighbor_distance"])
+    assert np.isclose(cluster30["background_nearest_neighbor_distance"], 0.115)
+    assert np.isclose(cluster40["sample_nearest_neighbor_distance"], 0.225)
+    assert np.isclose(cluster40["background_nearest_neighbor_distance"], 0.09)
     assert cluster10["log2fc_smooth"] > 0
     assert cluster10["density_validity_full"] == cluster10["density_validity"]
     assert cluster10["density_validity"] < 0
@@ -149,6 +179,8 @@ def test_append_auxiliary_cluster_metrics_handles_missing_knn():
     )
 
     assert result["sample_usage"].notna().all()
+    assert result["sample_nearest_neighbor_distance"].isna().all()
+    assert result["background_nearest_neighbor_distance"].isna().all()
     assert result["density_validity"].isna().all()
     assert result["density_validity_full"].isna().all()
     assert result["density_validity_enriched_only"].isna().all()
@@ -237,6 +269,8 @@ def test_append_auxiliary_cluster_metrics_marks_sample_knn_closed_clusters_and_r
         ],
         dtype=np.float32,
     )
+    background_knn_indices = np.array([[0]], dtype=np.int32)
+    background_knn_distances = np.array([[0.0]], dtype=np.float32)
 
     result = append_auxiliary_cluster_metrics(
         summary_df,
@@ -245,6 +279,8 @@ def test_append_auxiliary_cluster_metrics_marks_sample_knn_closed_clusters_and_r
         total_background=10,
         sample_knn_indices=sample_knn_indices,
         sample_knn_distances=sample_knn_distances,
+        background_knn_indices=background_knn_indices,
+        background_knn_distances=background_knn_distances,
     )
 
     cluster1 = result.loc[result["cluster_id"] == 1].iloc[0]
@@ -292,6 +328,8 @@ def test_append_auxiliary_cluster_metrics_relaxed_candidate_still_requires_min_s
         ],
         dtype=np.float32,
     )
+    background_knn_indices = np.array([[0]], dtype=np.int32)
+    background_knn_distances = np.array([[0.0]], dtype=np.float32)
 
     result = append_auxiliary_cluster_metrics(
         summary_df,
@@ -300,6 +338,8 @@ def test_append_auxiliary_cluster_metrics_relaxed_candidate_still_requires_min_s
         total_background=10,
         sample_knn_indices=sample_knn_indices,
         sample_knn_distances=sample_knn_distances,
+        background_knn_indices=background_knn_indices,
+        background_knn_distances=background_knn_distances,
     )
 
     cluster1 = result.loc[result["cluster_id"] == 1].iloc[0]
@@ -344,6 +384,8 @@ def test_append_auxiliary_cluster_metrics_sets_enriched_only_nan_when_fewer_than
         ],
         dtype=np.float32,
     )
+    background_knn_indices = np.array([[0]], dtype=np.int32)
+    background_knn_distances = np.array([[0.0]], dtype=np.float32)
 
     result = append_auxiliary_cluster_metrics(
         summary_df,
@@ -352,6 +394,8 @@ def test_append_auxiliary_cluster_metrics_sets_enriched_only_nan_when_fewer_than
         total_background=1,
         sample_knn_indices=sample_knn_indices,
         sample_knn_distances=sample_knn_distances,
+        background_knn_indices=background_knn_indices,
+        background_knn_distances=background_knn_distances,
     )
 
     assert result["density_validity_full"].notna().any()

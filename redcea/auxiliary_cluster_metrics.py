@@ -7,6 +7,8 @@ import pandas as pd
 AUXILIARY_CLUSTER_METRIC_COLUMNS = [
     "sample_usage",
     "background_usage",
+    "sample_nearest_neighbor_distance",
+    "background_nearest_neighbor_distance",
     "sample_fraction_in_cluster",
     "log2fc_smooth",
     "fc_smooth",
@@ -64,6 +66,8 @@ def append_auxiliary_cluster_metrics(
     total_background: int,
     sample_knn_indices: np.ndarray | None = None,
     sample_knn_distances: np.ndarray | None = None,
+    background_knn_indices: np.ndarray | None = None,
+    background_knn_distances: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Append lightweight enrichment and geometry metrics to a cluster summary."""
     if total_sample <= 0 or total_background <= 0:
@@ -76,6 +80,15 @@ def append_auxiliary_cluster_metrics(
         total_sample=total_sample,
         total_background=total_background,
     )
+    source_neighbor_df = _compute_source_neighbor_metrics(
+        cluster_df=prepared_cluster_df,
+        summary_df=summary,
+        sample_knn_indices=sample_knn_indices,
+        sample_knn_distances=sample_knn_distances,
+        background_knn_indices=background_knn_indices,
+        background_knn_distances=background_knn_distances,
+    )
+    summary = summary.merge(source_neighbor_df, on="cluster_id", how="left")
 
     geometry_df = _compute_geometry_metrics(
         cluster_df=prepared_cluster_df,
@@ -150,6 +163,69 @@ def _append_enrichment_metrics(
         * capped_fdr_score
     )
     return summary
+
+
+def _compute_source_neighbor_metrics(
+    *,
+    cluster_df: pd.DataFrame,
+    summary_df: pd.DataFrame,
+    sample_knn_indices: np.ndarray | None,
+    sample_knn_distances: np.ndarray | None,
+    background_knn_indices: np.ndarray | None,
+    background_knn_distances: np.ndarray | None,
+) -> pd.DataFrame:
+    cluster_ids = summary_df["cluster_id"].to_numpy(dtype=np.int64, copy=False)
+    metrics_df = pd.DataFrame({"cluster_id": pd.Index(pd.unique(cluster_ids), dtype="int64")})
+    metrics_df["sample_nearest_neighbor_distance"] = np.nan
+    metrics_df["background_nearest_neighbor_distance"] = np.nan
+
+    sample_df = cluster_df.loc[cluster_df["source"] == "sample"].reset_index(drop=True)
+    if sample_knn_indices is not None and sample_knn_distances is not None and not sample_df.empty:
+        _validate_self_knn_shapes(
+            point_count=len(sample_df),
+            knn_indices=sample_knn_indices,
+            knn_distances=sample_knn_distances,
+            label="sample",
+        )
+        sample_nn_distance = _compute_first_nonself_neighbor_distance(
+            knn_indices=sample_knn_indices,
+            knn_distances=sample_knn_distances,
+        )
+        sample_stats = _summarize_cluster_point_values(
+            cluster_ids=sample_df["cluster_id"].to_numpy(dtype=np.int64, copy=False),
+            values=sample_nn_distance,
+            value_column="sample_nearest_neighbor_distance",
+        )
+        metrics_df = metrics_df.merge(sample_stats, on="cluster_id", how="left", suffixes=("", "__new"))
+        metrics_df["sample_nearest_neighbor_distance"] = metrics_df[
+            "sample_nearest_neighbor_distance__new"
+        ].fillna(metrics_df["sample_nearest_neighbor_distance"])
+        metrics_df = metrics_df.drop(columns=["sample_nearest_neighbor_distance__new"])
+
+    background_df = cluster_df.loc[cluster_df["source"] == "background"].reset_index(drop=True)
+    if background_knn_indices is not None and background_knn_distances is not None and not background_df.empty:
+        _validate_self_knn_shapes(
+            point_count=len(background_df),
+            knn_indices=background_knn_indices,
+            knn_distances=background_knn_distances,
+            label="background",
+        )
+        background_nn_distance = _compute_first_nonself_neighbor_distance(
+            knn_indices=background_knn_indices,
+            knn_distances=background_knn_distances,
+        )
+        background_stats = _summarize_cluster_point_values(
+            cluster_ids=background_df["cluster_id"].to_numpy(dtype=np.int64, copy=False),
+            values=background_nn_distance,
+            value_column="background_nearest_neighbor_distance",
+        )
+        metrics_df = metrics_df.merge(background_stats, on="cluster_id", how="left", suffixes=("", "__new"))
+        metrics_df["background_nearest_neighbor_distance"] = metrics_df[
+            "background_nearest_neighbor_distance__new"
+        ].fillna(metrics_df["background_nearest_neighbor_distance"])
+        metrics_df = metrics_df.drop(columns=["background_nearest_neighbor_distance__new"])
+
+    return metrics_df
 
 
 def _compute_geometry_metrics(
@@ -406,6 +482,54 @@ def _compute_core_distances(
     return core_dist.astype("float64", copy=False)
 
 
+def _validate_self_knn_shapes(
+    *,
+    point_count: int,
+    knn_indices: np.ndarray,
+    knn_distances: np.ndarray,
+    label: str,
+) -> None:
+    if knn_indices.shape != knn_distances.shape:
+        raise ValueError(
+            f"{label} kNN indices/distances shape mismatch: {knn_indices.shape} vs {knn_distances.shape}"
+        )
+    if knn_indices.shape[0] != point_count:
+        raise ValueError(
+            f"{label} kNN row count {knn_indices.shape[0]} does not match {label} point row count {point_count}."
+        )
+
+
+def _compute_first_nonself_neighbor_distance(
+    *,
+    knn_indices: np.ndarray,
+    knn_distances: np.ndarray,
+) -> np.ndarray:
+    n_points, _ = knn_indices.shape
+    row_ids = np.arange(n_points, dtype=np.int64)[:, None]
+    valid_mask = (knn_indices != row_ids) & np.isfinite(knn_distances)
+    filtered = np.where(valid_mask, knn_distances.astype(np.float64, copy=False), np.inf)
+    nearest = filtered.min(axis=1)
+    nearest[~np.isfinite(nearest)] = np.nan
+    return nearest.astype("float64", copy=False)
+
+
+def _summarize_cluster_point_values(
+    *,
+    cluster_ids: np.ndarray,
+    values: np.ndarray,
+    value_column: str,
+) -> pd.DataFrame:
+    if cluster_ids.size == 0:
+        return pd.DataFrame(columns=["cluster_id", value_column])
+    point_df = pd.DataFrame(
+        {
+            "cluster_id": cluster_ids.astype(np.int64, copy=False),
+            value_column: values.astype(np.float64, copy=False),
+        }
+    )
+    return point_df.groupby("cluster_id", sort=False)[value_column].mean().reset_index()
+
+
 def _empty_geometry_frame(cluster_ids: np.ndarray) -> pd.DataFrame:
     unique_cluster_ids = pd.Index(pd.unique(cluster_ids), dtype="int64")
     geometry = pd.DataFrame({"cluster_id": unique_cluster_ids})
@@ -501,6 +625,8 @@ def _clear_noise_cluster_metrics(summary_df: pd.DataFrame) -> pd.DataFrame:
         return summary
 
     columns_to_blank = _GEOMETRY_COLUMNS + [
+        "sample_nearest_neighbor_distance",
+        "background_nearest_neighbor_distance",
         "has_density_validity",
         "is_sample_knn_closed",
         "dbcv_with_odds",

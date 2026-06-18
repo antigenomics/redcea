@@ -52,6 +52,8 @@ def main() -> None:
         total_background = int(clusters_df["clone_id"].astype(str).str.startswith("b_").sum())
         sample_knn_indices = _load_first_npy(run_dir, "knn_sample_sample__*.indices.npy")
         sample_knn_distances = _load_first_npy(run_dir, "knn_sample_sample__*.distances.npy")
+        background_knn_indices = _load_first_npy(run_dir, "knn_bg_bg__*.indices.npy")
+        background_knn_distances = _load_first_npy(run_dir, "knn_bg_bg__*.distances.npy")
 
         extended = append_auxiliary_cluster_metrics(
             summary_df,
@@ -60,6 +62,8 @@ def main() -> None:
             total_background=total_background,
             sample_knn_indices=sample_knn_indices,
             sample_knn_distances=sample_knn_distances,
+            background_knn_indices=background_knn_indices,
+            background_knn_distances=background_knn_distances,
         )
         extended.to_csv(summary_path, sep="\t", index=False)
         updated += 1
