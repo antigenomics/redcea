@@ -397,6 +397,42 @@ def numeric_summary(values: pd.Series) -> dict[str, float]:
     }
 
 
+def _prepare_cluster_metric_inputs(cluster_df: pd.DataFrame) -> pd.DataFrame:
+    prepared = cluster_df.copy()
+    numeric_columns = [
+        "cluster_id",
+        "cluster_size",
+        "sample",
+        "background",
+        "sample_fraction_in_cluster",
+        "log_fold_change",
+        "enrichment_fdr_zbinom",
+    ]
+    for column in numeric_columns:
+        if column in prepared.columns:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+
+    if "cluster_size" not in prepared.columns:
+        prepared["cluster_size"] = np.nan
+    if {"sample", "background"}.issubset(prepared.columns):
+        computed_cluster_size = prepared["sample"] + prepared["background"]
+        prepared["cluster_size"] = prepared["cluster_size"].where(prepared["cluster_size"].notna(), computed_cluster_size)
+
+    if "sample_fraction_in_cluster" not in prepared.columns:
+        prepared["sample_fraction_in_cluster"] = np.nan
+    if "sample" in prepared.columns:
+        computed_fraction = pd.Series(np.nan, index=prepared.index, dtype="float64")
+        valid_cluster_size = prepared["cluster_size"] > 0
+        computed_fraction.loc[valid_cluster_size] = (
+            prepared.loc[valid_cluster_size, "sample"] / prepared.loc[valid_cluster_size, "cluster_size"]
+        )
+        prepared["sample_fraction_in_cluster"] = prepared["sample_fraction_in_cluster"].where(
+            prepared["sample_fraction_in_cluster"].notna(),
+            computed_fraction,
+        )
+    return prepared
+
+
 def _enriched_cluster_mask(frame: pd.DataFrame) -> pd.Series:
     if not {"log_fold_change", "enrichment_fdr_zbinom"}.issubset(frame.columns):
         return pd.Series(False, index=frame.index, dtype=bool)
@@ -420,10 +456,286 @@ def _mean_median(values: pd.Series) -> tuple[float, float]:
     return float(numeric.mean()), float(numeric.median())
 
 
+def _safe_ratio(numerator: float, denominator: float) -> float:
+    if pd.isna(numerator) or pd.isna(denominator):
+        return np.nan
+    if denominator == 0:
+        if numerator > 0:
+            return float(np.inf)
+        if numerator == 0:
+            return np.nan
+    return float(numerator / denominator)
+
+
+def _resolve_dense_group_cols(cluster_df: pd.DataFrame, group_cols: list[str] | tuple[str, ...] | str | None) -> list[str]:
+    if group_cols is not None:
+        resolved = [group_cols] if isinstance(group_cols, str) else list(group_cols)
+        missing = [column for column in resolved if column not in cluster_df.columns]
+        if missing:
+            raise ValueError("Dense score grouping columns are missing from cluster_df: {0}".format(", ".join(missing)))
+        return resolved
+
+    for candidate in (["sample_group"], ["epitope"], ["dataset"]):
+        if all(column in cluster_df.columns for column in candidate):
+            return candidate
+
+    logging.warning("No sample_group/epitope/dataset columns found; computing dense RedCEA ranks across all runs together.")
+    return []
+
+
+def _iter_comparison_groups(frame: pd.DataFrame, group_cols: list[str]) -> list[tuple[object, pd.DataFrame]]:
+    if not group_cols:
+        return [(None, frame)]
+    return list(frame.groupby(group_cols, sort=True, dropna=False))
+
+
+def compute_dense_redcea_scores(
+    cluster_df: pd.DataFrame,
+    group_cols: list[str] | tuple[str, ...] | str | None = None,
+) -> pd.DataFrame:
+    if cluster_df.empty or "run_id" not in cluster_df.columns:
+        return pd.DataFrame()
+
+    prepared = _prepare_cluster_metric_inputs(cluster_df)
+    resolved_group_cols = _resolve_dense_group_cols(prepared, group_cols)
+
+    rows: list[dict[str, object]] = []
+    for run_id, frame in prepared.groupby("run_id", sort=True):
+        row: dict[str, object] = {"run_id": run_id}
+        for column in resolved_group_cols:
+            row[column] = frame.iloc[0][column]
+
+        enriched_mask = _enriched_cluster_mask(frame)
+        sample_all = pd.to_numeric(frame.get("sample", pd.Series(dtype=float)), errors="coerce")
+        sample_enriched = pd.to_numeric(frame.loc[enriched_mask, "sample"], errors="coerce")
+        cluster_size_enriched = pd.to_numeric(frame.loc[enriched_mask, "cluster_size"], errors="coerce")
+        lfc_enriched = pd.to_numeric(frame.loc[enriched_mask, "log_fold_change"], errors="coerce")
+
+        total_sample = float(sample_all.sum()) if "sample" in frame.columns else np.nan
+        sample_mass_enriched = float(sample_enriched.sum()) if len(sample_enriched) else 0.0
+        cluster_mass_enriched = float(cluster_size_enriched.sum()) if len(cluster_size_enriched) else 0.0
+        background_mass_enriched = (
+            float(cluster_mass_enriched - sample_mass_enriched)
+            if pd.notna(cluster_mass_enriched) and pd.notna(sample_mass_enriched)
+            else np.nan
+        )
+        sample_coverage_enriched = (
+            float(sample_mass_enriched / total_sample) if pd.notna(total_sample) and total_sample > 0 else np.nan
+        )
+
+        effective_n = np.nan
+        effective_sample_cluster_size = np.nan
+        if sample_mass_enriched > 0:
+            cluster_weights = sample_enriched.fillna(0.0)
+            weight_fraction = cluster_weights / sample_mass_enriched
+            simpson_denom = float((weight_fraction**2).sum())
+            if simpson_denom > 0:
+                effective_n = float(1.0 / simpson_denom)
+                effective_sample_cluster_size = float(sample_mass_enriched / effective_n)
+
+        lfc_sample_weighted = np.nan
+        valid_lfc_mask = sample_enriched.notna() & lfc_enriched.notna()
+        if valid_lfc_mask.any():
+            lfc_weights = sample_enriched.loc[valid_lfc_mask]
+            weight_total = float(lfc_weights.sum())
+            if weight_total > 0:
+                lfc_sample_weighted = float((lfc_enriched.loc[valid_lfc_mask] * lfc_weights).sum() / weight_total)
+
+        row.update(
+            {
+                "sample_mass_enriched": sample_mass_enriched,
+                "cluster_mass_enriched": cluster_mass_enriched,
+                "background_mass_enriched": background_mass_enriched,
+                "sample_coverage_enriched": sample_coverage_enriched,
+                "effective_n_enriched_clusters_sample_weighted": effective_n,
+                "effective_sample_cluster_size": effective_sample_cluster_size,
+                "lfc_sample_weighted": lfc_sample_weighted,
+                "_total_sample": total_sample,
+                "_coverage_for_rank": float(np.log1p(sample_mass_enriched)) if pd.notna(sample_mass_enriched) else np.nan,
+            }
+        )
+        rows.append(row)
+
+    run_level = pd.DataFrame(rows)
+    if run_level.empty:
+        return run_level
+
+    run_level["coverage_rank_pct"] = np.nan
+    run_level["lfc_rank_pct"] = np.nan
+    run_level["eff_low_threshold"] = np.nan
+    run_level["eff_high_threshold"] = np.nan
+    run_level["effective_size_penalty"] = np.nan
+
+    for _, group_frame in _iter_comparison_groups(run_level, resolved_group_cols):
+        group_index = group_frame.index
+        run_level.loc[group_index, "coverage_rank_pct"] = group_frame["_coverage_for_rank"].rank(method="average", pct=True)
+        run_level.loc[group_index, "lfc_rank_pct"] = group_frame["lfc_sample_weighted"].rank(method="average", pct=True)
+
+        effective_sizes = pd.to_numeric(group_frame["effective_sample_cluster_size"], errors="coerce")
+        if effective_sizes.notna().any():
+            eff_low = max(float(effective_sizes.quantile(0.25)), 2.0)
+            eff_high = float(effective_sizes.quantile(0.75))
+        else:
+            eff_low = np.nan
+            eff_high = np.nan
+
+        run_level.loc[group_index, "eff_low_threshold"] = eff_low
+        run_level.loc[group_index, "eff_high_threshold"] = eff_high
+
+        penalty = pd.Series(np.nan, index=group_index, dtype="float64")
+        valid_eff_mask = effective_sizes.notna() & (effective_sizes > 0) & pd.notna(eff_low) & pd.notna(eff_high)
+        if valid_eff_mask.any():
+            valid_eff = effective_sizes.loc[valid_eff_mask]
+            penalty.loc[valid_eff.index] = np.minimum(1.0, valid_eff / eff_low) * np.minimum(1.0, eff_high / valid_eff)
+        run_level.loc[group_index, "effective_size_penalty"] = penalty
+
+    zero_enriched_mask = run_level["sample_mass_enriched"].eq(0) & run_level["_total_sample"].gt(0)
+    run_level.loc[zero_enriched_mask, "effective_size_penalty"] = 0.0
+    run_level.loc[zero_enriched_mask, "lfc_rank_pct"] = 0.0
+
+    run_level["redcea_dense_score_base"] = run_level["coverage_rank_pct"] * run_level["effective_size_penalty"]
+    run_level["redcea_dense_score"] = run_level["redcea_dense_score_base"] * run_level["lfc_rank_pct"]
+    run_level["redcea_dense_score_soft"] = run_level["redcea_dense_score_base"] * (0.5 + 0.5 * run_level["lfc_rank_pct"])
+
+    output_columns = [
+        "run_id",
+        *resolved_group_cols,
+        "redcea_dense_score",
+        "redcea_dense_score_soft",
+        "redcea_dense_score_base",
+        "coverage_rank_pct",
+        "sample_coverage_enriched",
+        "sample_mass_enriched",
+        "cluster_mass_enriched",
+        "background_mass_enriched",
+        "effective_n_enriched_clusters_sample_weighted",
+        "effective_sample_cluster_size",
+        "effective_size_penalty",
+        "eff_low_threshold",
+        "eff_high_threshold",
+        "lfc_sample_weighted",
+        "lfc_rank_pct",
+    ]
+    return run_level.loc[:, output_columns]
+
+
+def compute_lfc_mass_shift(cluster_df: pd.DataFrame, alpha: float = 1.5) -> pd.DataFrame:
+    if cluster_df.empty or "run_id" not in cluster_df.columns:
+        return pd.DataFrame()
+
+    prepared = _prepare_cluster_metric_inputs(cluster_df)
+    rows: list[dict[str, object]] = []
+    for run_id, frame in prepared.groupby("run_id", sort=True):
+        non_noise_mask = _non_noise_cluster_mask(frame)
+        significant_mask = non_noise_mask & (pd.to_numeric(frame["enrichment_fdr_zbinom"], errors="coerce") < 0.05)
+        positive_mask = significant_mask & (pd.to_numeric(frame["log_fold_change"], errors="coerce") > 0)
+        negative_mask = significant_mask & (pd.to_numeric(frame["log_fold_change"], errors="coerce") < 0)
+
+        pos_sample = pd.to_numeric(frame.loc[positive_mask, "sample"], errors="coerce").fillna(0.0)
+        neg_sample = pd.to_numeric(frame.loc[negative_mask, "sample"], errors="coerce").fillna(0.0)
+        pos_cluster_size = pd.to_numeric(frame.loc[positive_mask, "cluster_size"], errors="coerce")
+        neg_cluster_size = pd.to_numeric(frame.loc[negative_mask, "cluster_size"], errors="coerce")
+        pos_lfc = pd.to_numeric(frame.loc[positive_mask, "log_fold_change"], errors="coerce").abs()
+        neg_lfc = pd.to_numeric(frame.loc[negative_mask, "log_fold_change"], errors="coerce").abs()
+
+        lfc_pos_mass = float((pos_lfc * (pos_sample**alpha)).sum()) if len(pos_lfc) else 0.0
+        lfc_neg_mass = float((neg_lfc * (neg_sample**alpha)).sum()) if len(neg_lfc) else 0.0
+        denom = lfc_pos_mass + lfc_neg_mass
+        lfc_mass_shift = float((lfc_pos_mass - lfc_neg_mass) / denom) if denom > 0 else np.nan
+
+        sample_sig_pos = float(pos_sample.sum()) if len(pos_sample) else 0.0
+        sample_sig_neg = float(neg_sample.sum()) if len(neg_sample) else 0.0
+        cluster_mass_sig_pos = float(pos_cluster_size.sum()) if len(pos_cluster_size) else 0.0
+        cluster_mass_sig_neg = float(neg_cluster_size.sum()) if len(neg_cluster_size) else 0.0
+
+        mean_size_sig_pos, median_size_sig_pos = _mean_median(pos_cluster_size)
+
+        rows.append(
+            {
+                "run_id": run_id,
+                "lfc_mass_shift": lfc_mass_shift,
+                "lfc_pos_mass": lfc_pos_mass,
+                "lfc_neg_mass": lfc_neg_mass,
+                "n_sig_pos": int(positive_mask.sum()),
+                "n_sig_neg": int(negative_mask.sum()),
+                "sample_sig_pos": sample_sig_pos,
+                "sample_sig_neg": sample_sig_neg,
+                "sample_pos_neg_ratio": _safe_ratio(sample_sig_pos, sample_sig_neg),
+                "cluster_mass_sig_pos": cluster_mass_sig_pos,
+                "cluster_mass_sig_neg": cluster_mass_sig_neg,
+                "cluster_mass_pos_neg_ratio": _safe_ratio(cluster_mass_sig_pos, cluster_mass_sig_neg),
+                "mean_size_sig_pos": mean_size_sig_pos,
+                "median_size_sig_pos": median_size_sig_pos,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _compute_density_contrast(frame: pd.DataFrame, enriched_mask: pd.Series) -> dict[str, float]:
+    default = {
+        "cohesion_enriched__mean": np.nan,
+        "cohesion_non_enriched__mean": np.nan,
+        "density_proxy_enriched__mean": np.nan,
+        "density_proxy_non_enriched__mean": np.nan,
+        "density_proxy_enriched_to_non_enriched__ratio": np.nan,
+        "density_proxy_enriched_to_non_enriched__log2_ratio": np.nan,
+    }
+    if "cohesion" not in frame.columns:
+        return default
+
+    non_noise_mask = _non_noise_cluster_mask(frame)
+    valid_cohesion = pd.to_numeric(frame["cohesion"], errors="coerce")
+    valid_mask = non_noise_mask & valid_cohesion.notna() & (valid_cohesion != 0)
+    if not valid_mask.any():
+        return default
+
+    enriched_cohesion = valid_cohesion.loc[valid_mask & enriched_mask]
+    non_enriched_cohesion = valid_cohesion.loc[valid_mask & (~enriched_mask)]
+
+    enriched_mean = float(enriched_cohesion.mean()) if enriched_cohesion.notna().any() else np.nan
+    non_enriched_mean = float(non_enriched_cohesion.mean()) if non_enriched_cohesion.notna().any() else np.nan
+
+    density_proxy_enriched = 1.0 / enriched_cohesion if enriched_cohesion.notna().any() else pd.Series(dtype=float)
+    density_proxy_non_enriched = (
+        1.0 / non_enriched_cohesion if non_enriched_cohesion.notna().any() else pd.Series(dtype=float)
+    )
+
+    density_proxy_enriched_mean = (
+        float(density_proxy_enriched.mean()) if density_proxy_enriched.notna().any() else np.nan
+    )
+    density_proxy_non_enriched_mean = (
+        float(density_proxy_non_enriched.mean()) if density_proxy_non_enriched.notna().any() else np.nan
+    )
+
+    ratio = np.nan
+    log2_ratio = np.nan
+    if (
+        pd.notna(density_proxy_enriched_mean)
+        and pd.notna(density_proxy_non_enriched_mean)
+        and density_proxy_non_enriched_mean != 0
+    ):
+        ratio = float(density_proxy_enriched_mean / density_proxy_non_enriched_mean)
+        if ratio > 0:
+            log2_ratio = float(np.log2(ratio))
+
+    default.update(
+        {
+            "cohesion_enriched__mean": enriched_mean,
+            "cohesion_non_enriched__mean": non_enriched_mean,
+            "density_proxy_enriched__mean": density_proxy_enriched_mean,
+            "density_proxy_non_enriched__mean": density_proxy_non_enriched_mean,
+            "density_proxy_enriched_to_non_enriched__ratio": ratio,
+            "density_proxy_enriched_to_non_enriched__log2_ratio": log2_ratio,
+        }
+    )
+    return default
+
+
 def build_run_level_table(cluster_df: pd.DataFrame) -> pd.DataFrame:
     if cluster_df.empty:
         return pd.DataFrame()
 
+    cluster_df = _prepare_cluster_metric_inputs(cluster_df)
     metadata_like_columns = [
         "run_id",
         "run_dir",
@@ -508,6 +820,7 @@ def build_run_level_table(cluster_df: pd.DataFrame) -> pd.DataFrame:
         row["sample_fraction_all__median"] = sample_fraction_all_median
         row["sample_fraction_enriched__mean"] = sample_fraction_enriched_mean
         row["sample_fraction_enriched__median"] = sample_fraction_enriched_median
+        row.update(_compute_density_contrast(frame, enriched_mask))
 
         if "is_good_candidate" in frame.columns:
             row["good_candidate_count"] = int(frame["is_good_candidate"].fillna(False).astype(bool).sum())
@@ -522,7 +835,17 @@ def build_run_level_table(cluster_df: pd.DataFrame) -> pd.DataFrame:
             for suffix, value in stats.items():
                 row[f"{column}__{suffix}"] = value
         rows.append(row)
-    return pd.DataFrame(rows)
+
+    run_level_df = pd.DataFrame(rows)
+    dense_scores_df = compute_dense_redcea_scores(cluster_df)
+    lfc_mass_shift_df = compute_lfc_mass_shift(cluster_df)
+
+    if not dense_scores_df.empty:
+        dense_metric_columns = [column for column in dense_scores_df.columns if column == "run_id" or column not in metadata_like_columns]
+        run_level_df = run_level_df.merge(dense_scores_df.loc[:, dense_metric_columns], on="run_id", how="left")
+    if not lfc_mass_shift_df.empty:
+        run_level_df = run_level_df.merge(lfc_mass_shift_df, on="run_id", how="left")
+    return run_level_df
 
 
 def progress_message(

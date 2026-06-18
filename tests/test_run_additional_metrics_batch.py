@@ -7,6 +7,8 @@ import pandas as pd
 
 from scripts.run_additional_metrics_batch import (
     build_run_level_table,
+    compute_dense_redcea_scores,
+    compute_lfc_mass_shift,
     run_matches_filters,
     select_run_dirs,
 )
@@ -103,3 +105,135 @@ def test_build_run_level_table_adds_requested_dbcv_and_support_summaries():
     assert np.isclose(row["sample_fraction_all__median"], 0.5)
     assert np.isclose(row["sample_fraction_enriched__mean"], np.mean([0.8, 0.5]))
     assert np.isclose(row["sample_fraction_enriched__median"], 0.65)
+
+
+def test_compute_dense_redcea_scores_obeys_formula_and_range_constraints():
+    cluster_df = pd.DataFrame(
+        {
+            "run_id": ["run_a", "run_a", "run_b", "run_b", "run_c", "run_c"],
+            "dataset": ["epi_x", "epi_x", "epi_x", "epi_x", "epi_x", "epi_x"],
+            "cluster_id": [1, 2, 1, 2, 1, 2],
+            "sample": [40, 20, 30, 30, 12, 8],
+            "background": [10, 10, 15, 25, 2, 2],
+            "log_fold_change": [2.0, 1.0, 1.3, 0.8, 2.5, 2.0],
+            "enrichment_fdr_zbinom": [0.001, 0.01, 0.001, 0.02, 0.001, 0.002],
+        }
+    )
+
+    result = compute_dense_redcea_scores(cluster_df, group_cols=["dataset"]).set_index("run_id")
+
+    for column in [
+        "coverage_rank_pct",
+        "effective_size_penalty",
+        "lfc_rank_pct",
+        "redcea_dense_score",
+        "redcea_dense_score_soft",
+        "redcea_dense_score_base",
+    ]:
+        assert result[column].between(0, 1).all()
+
+    assert np.isclose(result.loc["run_a", "sample_mass_enriched"], 60.0)
+    assert np.isclose(result.loc["run_a", "cluster_mass_enriched"], 80.0)
+    assert np.isclose(result.loc["run_a", "background_mass_enriched"], 20.0)
+    assert np.isclose(result.loc["run_a", "sample_coverage_enriched"], 1.0)
+    assert np.isclose(result.loc["run_a", "effective_n_enriched_clusters_sample_weighted"], 1.8)
+    assert np.isclose(result.loc["run_a", "effective_sample_cluster_size"], 60.0 / 1.8)
+
+    assert np.isclose(
+        result.loc["run_a", "redcea_dense_score_base"],
+        result.loc["run_a", "coverage_rank_pct"] * result.loc["run_a", "effective_size_penalty"],
+    )
+    assert np.isclose(
+        result.loc["run_a", "redcea_dense_score"],
+        result.loc["run_a", "redcea_dense_score_base"] * result.loc["run_a", "lfc_rank_pct"],
+    )
+    assert np.isclose(
+        result.loc["run_a", "redcea_dense_score_soft"],
+        result.loc["run_a", "redcea_dense_score_base"] * (0.5 + 0.5 * result.loc["run_a", "lfc_rank_pct"]),
+    )
+
+
+def test_compute_dense_redcea_scores_uses_requested_grouping_and_fills_missing_cluster_size():
+    cluster_df = pd.DataFrame(
+        {
+            "run_id": ["run_a", "run_a", "run_b", "run_b", "run_c", "run_c", "run_d", "run_d"],
+            "sample_group": ["g1", "g1", "g1", "g1", "g2", "g2", "g2", "g2"],
+            "cluster_id": [1, 2, 1, 2, 1, 2, 1, 2],
+            "sample": [50, 10, 20, 10, 40, 10, 10, 10],
+            "background": [0, 0, 5, 5, 0, 0, 5, 5],
+            "log_fold_change": [2.0, 1.0, 1.2, 1.1, 2.2, 1.2, 1.1, 1.0],
+            "enrichment_fdr_zbinom": [0.001, 0.002, 0.01, 0.02, 0.001, 0.002, 0.01, 0.02],
+        }
+    )
+
+    result = compute_dense_redcea_scores(cluster_df).set_index("run_id")
+
+    assert np.isclose(result.loc["run_a", "cluster_mass_enriched"], 60.0)
+    assert np.isclose(result.loc["run_b", "cluster_mass_enriched"], 40.0)
+    assert result.loc["run_a", "coverage_rank_pct"] > result.loc["run_b", "coverage_rank_pct"]
+    assert result.loc["run_c", "coverage_rank_pct"] > result.loc["run_d", "coverage_rank_pct"]
+    assert np.isclose(result.loc["run_a", "coverage_rank_pct"], 1.0)
+    assert np.isclose(result.loc["run_b", "coverage_rank_pct"], 0.5)
+    assert np.isclose(result.loc["run_c", "coverage_rank_pct"], 1.0)
+    assert np.isclose(result.loc["run_d", "coverage_rank_pct"], 0.5)
+
+
+def test_compute_lfc_mass_shift_handles_directionality_and_significance():
+    cluster_df = pd.DataFrame(
+        {
+            "run_id": [
+                "run_pos",
+                "run_pos",
+                "run_neg",
+                "run_neg",
+                "run_balanced",
+                "run_balanced",
+                "run_ignore_nonsig",
+                "run_ignore_nonsig",
+                "run_ignore_nonsig",
+            ],
+            "cluster_id": [1, 2, 1, 2, 1, 2, 1, 2, 3],
+            "cluster_size": [12, 6, 8, 5, 9, 9, 10, 10, 8],
+            "sample": [8, 2, 5, 4, 4, 4, 6, 6, 20],
+            "background": [4, 4, 3, 1, 5, 5, 4, 4, 2],
+            "log_fold_change": [2.0, 1.0, -1.5, -0.5, 1.0, -1.0, 1.0, -1.0, 10.0],
+            "enrichment_fdr_zbinom": [0.001, 0.01, 0.001, 0.02, 0.001, 0.001, 0.001, 0.001, 0.5],
+        }
+    )
+
+    result = compute_lfc_mass_shift(cluster_df).set_index("run_id")
+
+    assert np.isclose(result.loc["run_pos", "lfc_mass_shift"], 1.0)
+    assert np.isclose(result.loc["run_neg", "lfc_mass_shift"], -1.0)
+    assert np.isclose(result.loc["run_balanced", "lfc_mass_shift"], 0.0)
+    assert np.isclose(result.loc["run_ignore_nonsig", "lfc_mass_shift"], 0.0)
+    assert np.isclose(result.loc["run_ignore_nonsig", "sample_sig_pos"], 6.0)
+    assert np.isclose(result.loc["run_ignore_nonsig", "sample_sig_neg"], 6.0)
+
+
+def test_build_run_level_table_merges_dense_and_longitudinal_metrics():
+    cluster_df = pd.DataFrame(
+        {
+            "run_id": ["run_a", "run_a", "run_b", "run_b"],
+            "dataset": ["epi_x", "epi_x", "epi_x", "epi_x"],
+            "cluster_id": [1, 2, 1, 2],
+            "sample": [10, 5, 6, 4],
+            "background": [2, 1, 2, 4],
+            "log_fold_change": [1.5, -0.4, 1.2, 0.8],
+            "enrichment_fdr_zbinom": [0.001, 0.001, 0.002, 0.02],
+            "density_validity_full": [0.3, 0.1, 0.2, 0.25],
+            "density_validity_enriched_only": [0.3, np.nan, 0.2, 0.25],
+            "density_validity": [0.3, 0.1, 0.2, 0.25],
+        }
+    )
+
+    result = build_run_level_table(cluster_df)
+
+    for column in [
+        "redcea_dense_score",
+        "redcea_dense_score_soft",
+        "redcea_dense_score_base",
+        "lfc_mass_shift",
+        "sample_sig_pos",
+    ]:
+        assert column in result.columns
