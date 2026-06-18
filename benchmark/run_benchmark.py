@@ -155,6 +155,7 @@ def build_execution_manifest(
             row.update(
                 {
                     "grid_id": grid_row["grid_id"],
+                    "config_id": grid_row["grid_id"],
                     "run_id": run_id,
                     "method": method,
                     "parameter_json": grid_row["parameter_json"],
@@ -190,7 +191,11 @@ def _sample_label_from_clone_id(clone_id: pd.Series) -> pd.Series:
 def _build_yfv_annotations(assignments: pd.DataFrame, donor_id: str) -> pd.DataFrame:
     out = assignments.copy()
     out["sample_label"] = _sample_label_from_clone_id(out["clone_id"])
-    subject, replicate = donor_id.split("_", 1)
+    donor_id = str(donor_id)
+    if "_" in donor_id:
+        subject, replicate = donor_id.split("_", 1)
+    else:
+        subject, replicate = donor_id, None
     out["donor_id"] = donor_id
     out["subject_id"] = subject
     out["replicate_id"] = replicate
@@ -300,6 +305,13 @@ def standardize_redcea_assignments(
 def _build_pipeline_config(manifest_row, params, output_dir: Path, nproc: int | None) -> PipelineConfig:
     env_nproc = os.environ.get("SLURM_CPUS_PER_TASK")
     resolved_nproc = nproc if nproc is not None else (int(env_nproc) if env_nproc else None)
+
+    def _optional_str(value):
+        if pd.isna(value):
+            return None
+        text = str(value).strip()
+        return text or None
+
     return PipelineConfig(
         sample=str(manifest_row["sample_airr_path"]),
         background=str(manifest_row["background_airr_path"]),
@@ -313,8 +325,8 @@ def _build_pipeline_config(manifest_row, params, output_dir: Path, nproc: int | 
         lower_len_cdr3=None,
         higher_len_cdr3=None,
         metrics="euclidean",
-        sample_embedding=str(manifest_row["sample_embedding_path"]),
-        background_embedding=str(manifest_row["background_embedding_path"]),
+        sample_embedding=_optional_str(manifest_row.get("sample_embedding_path")),
+        background_embedding=_optional_str(manifest_row.get("background_embedding_path")),
         n_bg_points=None,
         n_clonotypes=None,
         sample_random_clonotypes=False,
@@ -361,7 +373,10 @@ def execute_single_manifest_row(
     params = json.loads(manifest_row["parameter_json"])
     redcea_output_dir = Path(redcea_runs_dir) / run_id
     redcea_output_dir.mkdir(parents=True, exist_ok=True)
-    truth_table = build_vdjdb_truth_table(tcrvdb_path, padj_threshold=padj_threshold)
+    if dataset_mode == "vdjdb":
+        truth_table = build_vdjdb_truth_table(tcrvdb_path, padj_threshold=padj_threshold)
+    else:
+        truth_table = pd.DataFrame(columns=["epitope_aa", "chain", "cdr3", "v_gene", "j_gene", "truth_label"])
     started = time.perf_counter()
     error_traceback = ""
     assignments = None
@@ -482,7 +497,7 @@ def parse_args():
     parser.add_argument("--nproc", type=int, default=None)
     parser.add_argument(
         "--grid-size",
-        choices=["small", "large", "focused_vdbscan_leiden", "yfv_vdbscan_leiden_lowres"],
+        choices=["small", "large", "focused_vdbscan_leiden", "yfv_vdbscan_leiden_lowres", "yfv_redcea_benchmark"],
         default="small",
     )
     parser.add_argument("--dataset-mode-filter", choices=["all", "vdjdb", "yfv"], default="all")

@@ -1,0 +1,66 @@
+{
+  "dataset": {
+    "name": "yfv",
+    "chain": "beta"
+  },
+  "grid_size": "yfv_redcea_benchmark",
+  "donors": {
+    "P1": {
+      "pre": "/path/to/P1_day0.tsv",
+      "post": "/path/to/P1_day15.tsv"
+    },
+    "P2": {
+      "pre": "/path/to/P2_day0.tsv",
+      "post": "/path/to/P2_day15.tsv"
+    },
+    "Q1": {
+      "pre": "/path/to/Q1_day0.tsv",
+      "post": "/path/to/Q1_day15.tsv"
+    },
+    "Q2": {
+      "pre": "/path/to/Q2_day0.tsv",
+      "post": "/path/to/Q2_day15.tsv"
+    },
+    "S1": {
+      "pre": "/path/to/S1_day0.tsv",
+      "post": "/path/to/S1_day15.tsv"
+    },
+    "S2": {
+      "pre": "/path/to/S2_day0.tsv",
+      "post": "/path/to/S2_day15.tsv"
+    }
+  },
+  "columns": {
+    "cdr3": "cdr3",
+    "v_gene": "v",
+    "j_gene": "j",
+    "chain": "chain",
+    "count": "count"
+  },
+  "vdjdb": {
+    "path": "/path/to/vdjdb_or_llw_table.tsv",
+    "epitope": "LLWNGPMAV",
+    "epitope_col": "epitope",
+    "cdr3_col": "cdr3",
+    "v_col": "v",
+    "j_col": "j",
+    "chain_col": "chain",
+    "match_mode": "cdr3"
+  },
+  "enrichment": {
+    "qvalue_threshold": 0.05,
+    "log2fc_threshold": 0.0
+  },
+  "output": {
+    "outdir": "results/yfv_redcea_benchmark"
+  },
+  "grid": {
+    "algorithm": ["vdbscan_leiden"],
+    "k_neighbors": [8, 12, 16],
+    "eps_k_neighbors": [4, 8, 12],
+    "core_min_samples": [3],
+    "leiden_resolution": [0.25, 0.5, 1.0],
+    "eps_mode": ["sample"],
+    "sym_rule": ["asymmetric"]
+  }
+}

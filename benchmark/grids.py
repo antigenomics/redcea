@@ -89,6 +89,26 @@ YFV_VDBSCAN_LEIDEN_LOWRES_GRID = {
 }
 
 
+YFV_REDCEA_BENCHMARK_GRID = {
+    "vdbscan_leiden": [
+        {
+            "cluster_min_samples": 3,
+            "k_neighbors": k_neighbors,
+            "eps_k_neighbors": eps_k_neighbors,
+            "eps_estimation_based_on": "sample",
+            "vdbscan_sym_rule": "asymmetric",
+            "leiden_resolution": leiden_resolution,
+            "cluster_pc_components": 50,
+            "enrichment_test": "zbinom",
+        }
+        for k_neighbors in [8, 12, 16]
+        for eps_k_neighbors in [4, 8, 12]
+        if eps_k_neighbors <= k_neighbors
+        for leiden_resolution in [0.25, 0.5, 1.0]
+    ]
+}
+
+
 LARGE_GRID = {
     "dbscan": _paired_neighbor_grid(
         neighbor_values=[4, 8, 15],
@@ -154,6 +174,8 @@ def get_grid_spec(grid_size: str) -> dict[str, dict[str, list[object]]]:
         return VDBSCAN_LEIDEN_FOCUSED_GRID
     if grid_size == "yfv_vdbscan_leiden_lowres":
         return YFV_VDBSCAN_LEIDEN_LOWRES_GRID
+    if grid_size == "yfv_redcea_benchmark":
+        return YFV_REDCEA_BENCHMARK_GRID
     raise KeyError("Unknown grid_size: {0}".format(grid_size))
 
 
