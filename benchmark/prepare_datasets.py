@@ -255,65 +255,68 @@ def build_dataset_manifest(
     vdjdb_bg_airr: str | Path = DEFAULT_VDJDB_BG_SOURCE_AIRR,
     vdjdb_bg_embedding: str | Path = DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
     vdjdb_targets: list[str] | None = None,
+    dataset_mode_filter: str = "all",
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    selected_vdjdb_targets = resolve_vdjdb_target_keys(vdjdb_targets)
-    vdjdb_background_airr = Path(vdjdb_bg_airr)
-    vdjdb_background_embedding = Path(vdjdb_bg_embedding)
-    log_step("Validating shared VDJdb background inputs")
-    validate_embedding_airr_pair(vdjdb_background_airr, vdjdb_background_embedding)
+    if dataset_mode_filter != "yfv":
+        selected_vdjdb_targets = resolve_vdjdb_target_keys(vdjdb_targets)
+        vdjdb_background_airr = Path(vdjdb_bg_airr)
+        vdjdb_background_embedding = Path(vdjdb_bg_embedding)
+        log_step("Validating shared VDJdb background inputs")
+        validate_embedding_airr_pair(vdjdb_background_airr, vdjdb_background_embedding)
 
-    for target_key in selected_vdjdb_targets:
-        log_step("Preparing VDJdb dataset target={0}".format(target_key))
-        resolved = resolve_vdjdb_embedding_path(target_key, vdjdb_embed_dir)
-        rep_path = resolve_vdjdb_rep_path(target_key, vdjdb_airr_dir)
-        validate_embedding_airr_pair(rep_path, resolved["sample_embedding"])
-        rows.append(
-            {
-                "dataset": f"vdjdb_{target_key.lower()}",
-                "dataset_mode": "vdjdb",
-                "dataset_key": target_key,
-                "epitope": resolved["epitope_sequence"],
-                "donor_id": None,
-                "chain": "TRB",
-                "species": "HomoSapiens",
-                "sample_airr_path": str(rep_path),
-                "background_airr_path": str(vdjdb_background_airr),
-                "sample_embedding_path": str(resolved["sample_embedding"]),
-                "background_embedding_path": str(vdjdb_background_embedding),
-                "sample_index_path": str(resolved["sample_index"]),
-                "background_index_path": str(vdjdb_background_embedding.with_suffix(".index")),
-                "background_kind": "vdjdb_motifs_trb_background_100k",
-            }
-        )
+        for target_key in selected_vdjdb_targets:
+            log_step("Preparing VDJdb dataset target={0}".format(target_key))
+            resolved = resolve_vdjdb_embedding_path(target_key, vdjdb_embed_dir)
+            rep_path = resolve_vdjdb_rep_path(target_key, vdjdb_airr_dir)
+            validate_embedding_airr_pair(rep_path, resolved["sample_embedding"])
+            rows.append(
+                {
+                    "dataset": f"vdjdb_{target_key.lower()}",
+                    "dataset_mode": "vdjdb",
+                    "dataset_key": target_key,
+                    "epitope": resolved["epitope_sequence"],
+                    "donor_id": None,
+                    "chain": "TRB",
+                    "species": "HomoSapiens",
+                    "sample_airr_path": str(rep_path),
+                    "background_airr_path": str(vdjdb_background_airr),
+                    "sample_embedding_path": str(resolved["sample_embedding"]),
+                    "background_embedding_path": str(vdjdb_background_embedding),
+                    "sample_index_path": str(resolved["sample_index"]),
+                    "background_index_path": str(vdjdb_background_embedding.with_suffix(".index")),
+                    "background_kind": "vdjdb_motifs_trb_background_100k",
+                }
+            )
 
-    donor_ids = discover_yfv_donor_ids(yfv_runs_dir)
-    log_step("Discovered YFV donors count={0} in {1}".format(len(donor_ids), yfv_runs_dir))
-    for donor_id in donor_ids:
-        log_step("Preparing YFV dataset donor={0}".format(donor_id))
-        resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
-        sample_airr = Path(resolved["sample_representation"])
-        background_airr = Path(resolved["background_representation"])
-        validate_embedding_airr_pair(sample_airr, resolved["sample_embedding"])
-        validate_embedding_airr_pair(background_airr, resolved["background_embedding"])
-        rows.append(
-            {
-                "dataset": "yfv_repertoires",
-                "dataset_mode": "yfv",
-                "dataset_key": donor_id,
-                "epitope": None,
-                "donor_id": donor_id,
-                "chain": "TRB",
-                "species": "HomoSapiens",
-                "sample_airr_path": str(sample_airr),
-                "background_airr_path": str(background_airr),
-                "sample_embedding_path": str(resolved["sample_embedding"]),
-                "background_embedding_path": str(resolved["background_embedding"]),
-                "sample_index_path": str(resolved["sample_index"]),
-                "background_index_path": str(resolved["background_index"]),
-                "background_kind": "paired_pre_vaccination_repertoire",
-            }
-        )
+    if dataset_mode_filter != "vdjdb":
+        donor_ids = discover_yfv_donor_ids(yfv_runs_dir)
+        log_step("Discovered YFV donors count={0} in {1}".format(len(donor_ids), yfv_runs_dir))
+        for donor_id in donor_ids:
+            log_step("Preparing YFV dataset donor={0}".format(donor_id))
+            resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
+            sample_airr = Path(resolved["sample_representation"])
+            background_airr = Path(resolved["background_representation"])
+            validate_embedding_airr_pair(sample_airr, resolved["sample_embedding"])
+            validate_embedding_airr_pair(background_airr, resolved["background_embedding"])
+            rows.append(
+                {
+                    "dataset": "yfv_repertoires",
+                    "dataset_mode": "yfv",
+                    "dataset_key": donor_id,
+                    "epitope": None,
+                    "donor_id": donor_id,
+                    "chain": "TRB",
+                    "species": "HomoSapiens",
+                    "sample_airr_path": str(sample_airr),
+                    "background_airr_path": str(background_airr),
+                    "sample_embedding_path": str(resolved["sample_embedding"]),
+                    "background_embedding_path": str(resolved["background_embedding"]),
+                    "sample_index_path": str(resolved["sample_index"]),
+                    "background_index_path": str(resolved["background_index"]),
+                    "background_kind": "paired_pre_vaccination_repertoire",
+                }
+            )
 
     return pd.DataFrame(rows)
 
@@ -328,6 +331,7 @@ def write_processed_datasets(
     vdjdb_bg_embedding: str | Path = DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
     tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
     vdjdb_targets: list[str] | None = None,
+    dataset_mode_filter: str = "all",
 ) -> dict[str, Path]:
     processed_dir = Path(processed_dir)
     processed_dir.mkdir(parents=True, exist_ok=True)
@@ -337,19 +341,20 @@ def write_processed_datasets(
     yfv_runs_dir = Path(yfv_runs_dir)
     log_step("Starting dataset preparation; processed_dir={0}".format(processed_dir))
     try:
-        donor_ids = discover_yfv_donor_ids(yfv_runs_dir)
-        log_step("Discovered YFV donors for normalization count={0} in {1}".format(len(donor_ids), yfv_runs_dir))
-        for donor_id in donor_ids:
-            log_step("Materializing normalized YFV AIRR donor={0}".format(donor_id))
-            resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
-            materialize_standardized_airr_table(
-                Path(resolved["sample_representation"]),
-                normalized_yfv_airr_dir / "{0}_sample.tsv".format(donor_id),
-            )
-            materialize_standardized_airr_table(
-                Path(resolved["background_representation"]),
-                normalized_yfv_airr_dir / "{0}_background.tsv".format(donor_id),
-            )
+        if dataset_mode_filter != "vdjdb":
+            donor_ids = discover_yfv_donor_ids(yfv_runs_dir)
+            log_step("Discovered YFV donors for normalization count={0} in {1}".format(len(donor_ids), yfv_runs_dir))
+            for donor_id in donor_ids:
+                log_step("Materializing normalized YFV AIRR donor={0}".format(donor_id))
+                resolved = resolve_yfv_embedding_paths(donor_id, yfv_runs_dir)
+                materialize_standardized_airr_table(
+                    Path(resolved["sample_representation"]),
+                    normalized_yfv_airr_dir / "{0}_sample.tsv".format(donor_id),
+                )
+                materialize_standardized_airr_table(
+                    Path(resolved["background_representation"]),
+                    normalized_yfv_airr_dir / "{0}_background.tsv".format(donor_id),
+                )
 
         dataset_manifest = build_dataset_manifest(
             yfv_runs_dir=yfv_runs_dir,
@@ -358,6 +363,7 @@ def write_processed_datasets(
             vdjdb_bg_airr=vdjdb_bg_airr,
             vdjdb_bg_embedding=vdjdb_bg_embedding,
             vdjdb_targets=vdjdb_targets,
+            dataset_mode_filter=dataset_mode_filter,
         )
         if len(dataset_manifest):
             yfv_mask = dataset_manifest["dataset_mode"].eq("yfv")
@@ -375,6 +381,10 @@ def write_processed_datasets(
             dataset_manifest["dataset_mode"].ne("vdjdb")
             | dataset_manifest["dataset_key"].astype(str).isin(selected_vdjdb_targets)
         ].reset_index(drop=True)
+        if dataset_mode_filter != "all":
+            dataset_manifest = dataset_manifest.loc[
+                dataset_manifest["dataset_mode"].astype(str) == str(dataset_mode_filter)
+            ].reset_index(drop=True)
         log_step("Built results-only dataset manifest rows={0}".format(len(dataset_manifest)))
     known_yfv = build_known_yfv_clonotypes(tcrvdb_path)
     output_paths = {
@@ -397,6 +407,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vdjdb-bg-embedding", default=str(DEFAULT_VDJDB_BG_SOURCE_EMBEDDING))
     parser.add_argument("--tcrvdb-path", default=str(DEFAULT_TCRVDB_PATH))
     parser.add_argument("--processed-dir", default="data/processed")
+    parser.add_argument("--dataset-mode-filter", choices=["all", "vdjdb", "yfv"], default="all")
     parser.add_argument(
         "--vdjdb-targets",
         default=None,
@@ -420,6 +431,7 @@ def main() -> int:
         vdjdb_bg_embedding=args.vdjdb_bg_embedding,
         tcrvdb_path=args.tcrvdb_path,
         vdjdb_targets=_normalize_csv_tokens(args.vdjdb_targets),
+        dataset_mode_filter=args.dataset_mode_filter,
     )
     for name, path in output_paths.items():
         print(f"Wrote {name}: {path}")

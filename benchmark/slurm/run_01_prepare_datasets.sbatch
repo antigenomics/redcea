@@ -26,6 +26,9 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 CMD=("$PYTHON_BIN" benchmark/prepare_datasets.py)
+if [[ -n "${BENCHMARK_DATASET_MODE_FILTER:-}" ]]; then
+  CMD+=(--dataset-mode-filter "${BENCHMARK_DATASET_MODE_FILTER}")
+fi
 if [[ -n "${BENCHMARK_VDJDB_TARGETS:-}" ]]; then
   CMD+=(--vdjdb-targets "${BENCHMARK_VDJDB_TARGETS}")
 fi

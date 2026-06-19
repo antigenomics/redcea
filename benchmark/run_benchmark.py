@@ -96,6 +96,70 @@ def build_grid_manifest(grid_size="small"):
     return manifest
 
 
+def _format_run_param_value(value) -> str:
+    alias = {
+        "sample": "s",
+        "background": "bg",
+        "all": "all",
+        "asymmetric": "asym",
+        "max": "max",
+    }
+    if pd.isna(value):
+        return "na"
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return "{0:g}".format(value).replace(".", "p")
+    text = str(value).strip().lower()
+    if text in alias:
+        return alias[text]
+    sanitized = []
+    for char in text:
+        if char.isalnum():
+            sanitized.append(char)
+        elif char in {".", "-"}:
+            sanitized.append("p")
+    return "".join(sanitized) or "na"
+
+
+def _build_run_param_tag(params: dict[str, object]) -> str:
+    abbreviations = {
+        "cluster_min_samples": "ms",
+        "core_min_samples": "cms",
+        "k_neighbors": "kn",
+        "eps_k_neighbors": "ek",
+        "eps_estimation_based_on": "eb",
+        "vdbscan_sym_rule": "sr",
+        "leiden_resolution": "lr",
+        "leiden_sub_resolution": "lsr",
+        "cluster_pc_components": "pc",
+    }
+    preferred_order = [
+        "cluster_min_samples",
+        "core_min_samples",
+        "k_neighbors",
+        "eps_k_neighbors",
+        "eps_estimation_based_on",
+        "vdbscan_sym_rule",
+        "leiden_resolution",
+        "leiden_sub_resolution",
+        "cluster_pc_components",
+    ]
+    ordered_keys = [key for key in preferred_order if key in params]
+    ordered_keys.extend(sorted(key for key in params if key not in abbreviations and key not in ordered_keys))
+    pieces = []
+    for key in ordered_keys:
+        if key not in abbreviations:
+            continue
+        value = params.get(key)
+        if value is None:
+            continue
+        pieces.append("{0}{1}".format(abbreviations[key], _format_run_param_value(value)))
+    return "_".join(pieces)
+
+
 def _load_dataset_manifest(processed_dir: str | Path) -> pd.DataFrame:
     path = Path(processed_dir) / "benchmark_dataset_manifest.tsv"
     if not path.exists():
@@ -171,12 +235,16 @@ def build_execution_manifest(
             dataset_mode = str(dataset_row["dataset_mode"])
             dataset = str(dataset_row["dataset"])
             method = str(grid_row["method"])
+            params = json.loads(str(grid_row["parameter_json"]))
+            param_tag = _build_run_param_tag(params)
             donor_id = None if pd.isna(dataset_row.get("donor_id")) else str(dataset_row.get("donor_id"))
             epitope = None if pd.isna(dataset_row.get("epitope")) else str(dataset_row.get("epitope"))
             if dataset_mode == "vdjdb":
                 run_id = "{0}_{1}_{2}".format(dataset, method, grid_row["grid_id"])
             else:
                 run_id = "yfv_{0}_{1}_{2}".format(donor_id, method, grid_row["grid_id"])
+            if param_tag:
+                run_id = "{0}_{1}".format(run_id, param_tag)
             row = dataset_row.to_dict()
             row.update(
                 {

@@ -127,8 +127,16 @@ The notebooks expect a dataset manifest under `data/processed/benchmark_dataset_
 - `VDJdb` baseline table
 - `TRB` VDJdb sample embeddings in `../vdjdb-motifs/results/redcea/tcremp`
 - `TRB` VDJdb AIRR tables in `../vdjdb-motifs/results/redcea/airr_format`
-- `YFV` sample/background embeddings in `/projects/immunestatus/pogorelyy/redcea/runs/yfv_*`
-- `YFV` AIRR tables in `/projects/immunestatus/pogorelyy/airr_format`
+- `YFV` sample/background embeddings in `/projects/immunestatus/pogorelyy/tcremp`
+- `YFV` AIRR tables in `/projects/immunestatus/pogorelyy/tcremp`
+
+For YFV, `prepare_datasets.py` expects these upstream filename patterns inside
+`/projects/immunestatus/pogorelyy/tcremp`:
+
+- `{SUBJECT}_15_{REPLICATE}_tcremp.parquet`
+- `{SUBJECT}_0_{REPLICATE}_with_1_tcremp.parquet`
+- `{SUBJECT}_15_{REPLICATE}_tcremp_representations.tsv`
+- `{SUBJECT}_0_{REPLICATE}_with_1_tcremp_representations.tsv`
 
 For the `TRB` VDJdb background, the benchmark uses the canonical `vdjdb-motifs` source background directly:
 
