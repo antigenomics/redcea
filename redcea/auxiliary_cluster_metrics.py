@@ -10,6 +10,7 @@ AUXILIARY_CLUSTER_METRIC_COLUMNS = [
     "sample_nearest_neighbor_distance",
     "background_nearest_neighbor_distance",
     "sample_fraction_in_cluster",
+    "log_fold_change_possig",
     "log2fc_smooth",
     "fc_smooth",
     "minus_log10_fdr",
@@ -142,6 +143,13 @@ def _append_enrichment_metrics(
     summary["sample_usage"] = sample_count / float(total_sample)
     summary["background_usage"] = background_count / float(total_background)
     summary["sample_fraction_in_cluster"] = np.where(cluster_size > 0, sample_count / cluster_size, np.nan)
+    summary["log_fold_change_possig"] = np.where(
+        (summary["cluster_id"] != _NOISE_CLUSTER_ID)
+        & (summary["enrichment_fdr_zbinom"] < _FDR_THRESHOLD)
+        & (summary["log_fold_change"] > 0),
+        summary["log_fold_change"],
+        np.nan,
+    )
 
     summary["log2fc_smooth"] = (
         np.log2((sample_count + _ALPHA) / float(total_sample))
