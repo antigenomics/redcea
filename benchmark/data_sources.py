@@ -32,7 +32,77 @@ VDJDB_TARGETS = {
         "index_filename": "trb_vdjdb_YLQPRTFLL_sample_embeddings.index",
         "representation_filename": "trb_vdjdb_YLQPRTFLL.tsv",
     },
+    "GILGFVFTL": {
+        "epitope_sequence": "GILGFVFTL",
+        "embedding_filename": "trb_vdjdb_GILGFVFTL_sample_embeddings.parquet",
+        "index_filename": "trb_vdjdb_GILGFVFTL_sample_embeddings.index",
+        "representation_filename": "trb_vdjdb_GILGFVFTL.tsv",
+    },
+    "NLVPMVATV": {
+        "epitope_sequence": "NLVPMVATV",
+        "embedding_filename": "trb_vdjdb_NLVPMVATV_sample_embeddings.parquet",
+        "index_filename": "trb_vdjdb_NLVPMVATV_sample_embeddings.index",
+        "representation_filename": "trb_vdjdb_NLVPMVATV.tsv",
+    },
+    "AVFDRKSDAK": {
+        "epitope_sequence": "AVFDRKSDAK",
+        "embedding_filename": "trb_vdjdb_AVFDRKSDAK_sample_embeddings.parquet",
+        "index_filename": "trb_vdjdb_AVFDRKSDAK_sample_embeddings.index",
+        "representation_filename": "trb_vdjdb_AVFDRKSDAK.tsv",
+    },
+    "ELAGIGILTV": {
+        "epitope_sequence": "ELAGIGILTV",
+        "embedding_filename": "trb_vdjdb_ELAGIGILTV_sample_embeddings.parquet",
+        "index_filename": "trb_vdjdb_ELAGIGILTV_sample_embeddings.index",
+        "representation_filename": "trb_vdjdb_ELAGIGILTV.tsv",
+    },
+    "RAKFKQLL": {
+        "epitope_sequence": "RAKFKQLL",
+        "embedding_filename": "trb_vdjdb_RAKFKQLL_sample_embeddings.parquet",
+        "index_filename": "trb_vdjdb_RAKFKQLL_sample_embeddings.index",
+        "representation_filename": "trb_vdjdb_RAKFKQLL.tsv",
+    },
 }
+
+DEFAULT_VDJDB_BENCHMARK_TARGETS = ("GLC", "YLQ")
+
+
+def resolve_vdjdb_target_keys(target_tokens=None):
+    if target_tokens is None:
+        return list(DEFAULT_VDJDB_BENCHMARK_TARGETS)
+    normalized_tokens = [str(token).strip() for token in target_tokens if str(token).strip()]
+    if not normalized_tokens:
+        return list(DEFAULT_VDJDB_BENCHMARK_TARGETS)
+    epitope_to_key = {
+        str(target["epitope_sequence"]).upper(): key for key, target in VDJDB_TARGETS.items()
+    }
+    resolved_keys = []
+    seen_keys = set()
+    unknown_tokens = []
+    for token in normalized_tokens:
+        token_upper = token.upper()
+        key = None
+        if token_upper in VDJDB_TARGETS:
+            key = token_upper
+        elif token_upper in epitope_to_key:
+            key = epitope_to_key[token_upper]
+        if key is None:
+            unknown_tokens.append(token)
+            continue
+        if key not in seen_keys:
+            seen_keys.add(key)
+            resolved_keys.append(key)
+    if unknown_tokens:
+        known_tokens = sorted(
+            set(list(VDJDB_TARGETS.keys()) + [target["epitope_sequence"] for target in VDJDB_TARGETS.values()])
+        )
+        raise KeyError(
+            "Unknown VDJdb target token(s): {0}. Known keys/sequences: {1}".format(
+                ",".join(unknown_tokens),
+                ",".join(known_tokens),
+            )
+        )
+    return resolved_keys
 
 def _split_yfv_donor_id(donor_id):
     subject, replicate = donor_id.split("_", 1)

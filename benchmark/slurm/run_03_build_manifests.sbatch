@@ -25,4 +25,15 @@ if [[ -z "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python"
 fi
 
-"$PYTHON_BIN" benchmark/run_benchmark.py --mode manifest --grid-size "${BENCHMARK_GRID_SIZE:-small}"
+CMD=("$PYTHON_BIN" benchmark/run_benchmark.py --mode manifest --grid-size "${BENCHMARK_GRID_SIZE:-small}")
+if [[ -n "${BENCHMARK_DATASET_MODE_FILTER:-}" ]]; then
+  CMD+=(--dataset-mode-filter "${BENCHMARK_DATASET_MODE_FILTER}")
+fi
+if [[ -n "${BENCHMARK_YFV_DONOR_IDS:-}" ]]; then
+  CMD+=(--yfv-donor-ids "${BENCHMARK_YFV_DONOR_IDS}")
+fi
+if [[ -n "${BENCHMARK_VDJDB_TARGETS:-}" ]]; then
+  CMD+=(--vdjdb-targets "${BENCHMARK_VDJDB_TARGETS}")
+fi
+
+"${CMD[@]}"

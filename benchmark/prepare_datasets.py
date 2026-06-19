@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from benchmark.airr_utils import normalize_segment, read_airr_like_table, standardize_metadata_frame, to_tcremp_airr_frame
 from benchmark.data_sources import (
+    DEFAULT_VDJDB_BENCHMARK_TARGETS,
     DEFAULT_TCRVDB_PADJ_THRESHOLD,
     DEFAULT_TCRVDB_PATH,
     DEFAULT_VDJDB_AIRR_DIR,
@@ -24,6 +25,7 @@ from benchmark.data_sources import (
     DEFAULT_YFV_RUNS_DIR,
     VDJDB_TARGETS,
     discover_yfv_donor_ids,
+    resolve_vdjdb_target_keys,
     resolve_tcrvdb_path,
     resolve_vdjdb_embedding_path,
     resolve_vdjdb_rep_path,
@@ -103,6 +105,13 @@ def build_results_only_dataset_manifest(*, redcea_runs_dir: str | Path = "result
                 }
             )
     return pd.DataFrame(rows)
+
+
+def _normalize_csv_tokens(raw_value: str | None) -> list[str] | None:
+    if raw_value is None:
+        return None
+    tokens = [token.strip() for token in str(raw_value).split(",") if token.strip()]
+    return tokens or None
 
 
 def build_vdjdb_truth_table(
@@ -245,14 +254,16 @@ def build_dataset_manifest(
     vdjdb_airr_dir: str | Path = DEFAULT_VDJDB_AIRR_DIR,
     vdjdb_bg_airr: str | Path = DEFAULT_VDJDB_BG_SOURCE_AIRR,
     vdjdb_bg_embedding: str | Path = DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
+    vdjdb_targets: list[str] | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
+    selected_vdjdb_targets = resolve_vdjdb_target_keys(vdjdb_targets)
     vdjdb_background_airr = Path(vdjdb_bg_airr)
     vdjdb_background_embedding = Path(vdjdb_bg_embedding)
     log_step("Validating shared VDJdb background inputs")
     validate_embedding_airr_pair(vdjdb_background_airr, vdjdb_background_embedding)
 
-    for target_key in sorted(VDJDB_TARGETS):
+    for target_key in selected_vdjdb_targets:
         log_step("Preparing VDJdb dataset target={0}".format(target_key))
         resolved = resolve_vdjdb_embedding_path(target_key, vdjdb_embed_dir)
         rep_path = resolve_vdjdb_rep_path(target_key, vdjdb_airr_dir)
@@ -316,6 +327,7 @@ def write_processed_datasets(
     vdjdb_bg_airr: str | Path = DEFAULT_VDJDB_BG_SOURCE_AIRR,
     vdjdb_bg_embedding: str | Path = DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
     tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
+    vdjdb_targets: list[str] | None = None,
 ) -> dict[str, Path]:
     processed_dir = Path(processed_dir)
     processed_dir.mkdir(parents=True, exist_ok=True)
@@ -345,6 +357,7 @@ def write_processed_datasets(
             vdjdb_airr_dir=vdjdb_airr_dir,
             vdjdb_bg_airr=vdjdb_bg_airr,
             vdjdb_bg_embedding=vdjdb_bg_embedding,
+            vdjdb_targets=vdjdb_targets,
         )
         if len(dataset_manifest):
             yfv_mask = dataset_manifest["dataset_mode"].eq("yfv")
@@ -357,6 +370,11 @@ def write_processed_datasets(
     except Exception as exc:
         log_step("Canonical dataset preparation is unavailable locally; falling back to results-only manifest. Reason: {0}".format(exc))
         dataset_manifest = build_results_only_dataset_manifest()
+        selected_vdjdb_targets = set(resolve_vdjdb_target_keys(vdjdb_targets))
+        dataset_manifest = dataset_manifest.loc[
+            dataset_manifest["dataset_mode"].ne("vdjdb")
+            | dataset_manifest["dataset_key"].astype(str).isin(selected_vdjdb_targets)
+        ].reset_index(drop=True)
         log_step("Built results-only dataset manifest rows={0}".format(len(dataset_manifest)))
     known_yfv = build_known_yfv_clonotypes(tcrvdb_path)
     output_paths = {
@@ -379,6 +397,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vdjdb-bg-embedding", default=str(DEFAULT_VDJDB_BG_SOURCE_EMBEDDING))
     parser.add_argument("--tcrvdb-path", default=str(DEFAULT_TCRVDB_PATH))
     parser.add_argument("--processed-dir", default="data/processed")
+    parser.add_argument(
+        "--vdjdb-targets",
+        default=None,
+        help=(
+            "Comma-separated VDJdb targets to prepare. Tokens may be short keys like "
+            "'GLC,YLQ' or full epitope sequences like 'GILGFVFTL,NLVPMVATV'. "
+            "Default: {0}".format(",".join(DEFAULT_VDJDB_BENCHMARK_TARGETS))
+        ),
+    )
     return parser.parse_args()
 
 
@@ -392,6 +419,7 @@ def main() -> int:
         vdjdb_bg_airr=args.vdjdb_bg_airr,
         vdjdb_bg_embedding=args.vdjdb_bg_embedding,
         tcrvdb_path=args.tcrvdb_path,
+        vdjdb_targets=_normalize_csv_tokens(args.vdjdb_targets),
     )
     for name, path in output_paths.items():
         print(f"Wrote {name}: {path}")

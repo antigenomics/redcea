@@ -16,6 +16,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from benchmark.airr_utils import standardize_metadata_frame, to_tcremp_airr_frame
+from benchmark.data_sources import DEFAULT_VDJDB_BENCHMARK_TARGETS, resolve_vdjdb_target_keys
 from benchmark.grids import get_enabled_methods, get_method_grid
 from benchmark.prepare_datasets import (
     DEFAULT_TCRVDB_PADJ_THRESHOLD,
@@ -114,10 +115,17 @@ def _filter_dataset_manifest(
     *,
     dataset_mode_filter: str = "all",
     yfv_donor_ids: list[str] | None = None,
+    vdjdb_targets: list[str] | None = None,
 ) -> pd.DataFrame:
     filtered = dataset_manifest.copy()
     if dataset_mode_filter != "all":
         filtered = filtered.loc[filtered["dataset_mode"].astype(str) == str(dataset_mode_filter)].copy()
+    if vdjdb_targets:
+        selected_targets = set(resolve_vdjdb_target_keys(vdjdb_targets))
+        vdjdb_mask = filtered["dataset_mode"].astype(str) == "vdjdb"
+        filtered = filtered.loc[
+            ~vdjdb_mask | filtered["dataset_key"].astype(str).isin(selected_targets)
+        ].copy()
     if yfv_donor_ids:
         donor_set = {str(donor_id) for donor_id in yfv_donor_ids}
         yfv_mask = filtered["dataset_mode"].astype(str) == "yfv"
@@ -131,12 +139,14 @@ def build_execution_manifest(
     *,
     dataset_mode_filter: str = "all",
     yfv_donor_ids: list[str] | None = None,
+    vdjdb_targets: list[str] | None = None,
 ):
     dataset_manifest = _load_dataset_manifest(processed_dir)
     dataset_manifest = _filter_dataset_manifest(
         dataset_manifest,
         dataset_mode_filter=dataset_mode_filter,
         yfv_donor_ids=yfv_donor_ids,
+        vdjdb_targets=vdjdb_targets,
     )
     grid_manifest = build_grid_manifest(grid_size=grid_size)
     rows = []
@@ -506,6 +516,15 @@ def parse_args():
         default=None,
         help="Comma-separated YFV donor IDs to keep in the execution manifest, e.g. P1_F1,P2_F1.",
     )
+    parser.add_argument(
+        "--vdjdb-targets",
+        default=None,
+        help=(
+            "Comma-separated VDJdb targets to keep in the execution manifest. "
+            "Tokens may be short keys like 'GLC,YLQ' or full epitope sequences like "
+            "'GILGFVFTL,NLVPMVATV'. Default: {0}".format(",".join(DEFAULT_VDJDB_BENCHMARK_TARGETS))
+        ),
+    )
     parser.add_argument("--mode", choices=["manifest", "single", "all", "consolidate"], default="all")
     parser.add_argument("--single-manifest-path", default=None)
     parser.add_argument("--single-row-index", type=int, default=None, help="1-based manifest row index for Slurm arrays.")
@@ -515,6 +534,7 @@ def parse_args():
 def main():
     args = parse_args()
     yfv_donor_ids = _normalize_csv_tokens(args.yfv_donor_ids)
+    vdjdb_targets = _normalize_csv_tokens(args.vdjdb_targets)
     if args.mode == "consolidate":
         consolidate_run_metadata(
             metadata_parts_dir=args.metadata_parts_dir,
@@ -548,6 +568,7 @@ def main():
         grid_size=args.grid_size,
         dataset_mode_filter=args.dataset_mode_filter,
         yfv_donor_ids=yfv_donor_ids,
+        vdjdb_targets=vdjdb_targets,
     )
     execution_path = Path(args.execution_path)
     execution_path.parent.mkdir(parents=True, exist_ok=True)

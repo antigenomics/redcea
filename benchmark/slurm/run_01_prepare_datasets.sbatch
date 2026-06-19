@@ -25,4 +25,9 @@ if [[ -z "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python"
 fi
 
-"$PYTHON_BIN" benchmark/prepare_datasets.py
+CMD=("$PYTHON_BIN" benchmark/prepare_datasets.py)
+if [[ -n "${BENCHMARK_VDJDB_TARGETS:-}" ]]; then
+  CMD+=(--vdjdb-targets "${BENCHMARK_VDJDB_TARGETS}")
+fi
+
+"${CMD[@]}"
