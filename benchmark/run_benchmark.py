@@ -133,6 +133,22 @@ def _filter_dataset_manifest(
     return filtered.reset_index(drop=True)
 
 
+def _build_empty_execution_manifest(dataset_manifest: pd.DataFrame) -> pd.DataFrame:
+    extra_columns = [
+        "grid_id",
+        "config_id",
+        "run_id",
+        "method",
+        "parameter_json",
+        "status",
+    ]
+    columns = list(dataset_manifest.columns)
+    for column in extra_columns:
+        if column not in columns:
+            columns.append(column)
+    return pd.DataFrame(columns=columns)
+
+
 def build_execution_manifest(
     processed_dir,
     grid_size="small",
@@ -141,9 +157,9 @@ def build_execution_manifest(
     yfv_donor_ids: list[str] | None = None,
     vdjdb_targets: list[str] | None = None,
 ):
-    dataset_manifest = _load_dataset_manifest(processed_dir)
+    full_dataset_manifest = _load_dataset_manifest(processed_dir)
     dataset_manifest = _filter_dataset_manifest(
-        dataset_manifest,
+        full_dataset_manifest,
         dataset_mode_filter=dataset_mode_filter,
         yfv_donor_ids=yfv_donor_ids,
         vdjdb_targets=vdjdb_targets,
@@ -175,7 +191,34 @@ def build_execution_manifest(
                 }
             )
             rows.append(row)
-    execution_manifest = pd.DataFrame(rows)
+    if rows:
+        execution_manifest = pd.DataFrame(rows)
+    else:
+        execution_manifest = _build_empty_execution_manifest(dataset_manifest)
+        available_vdjdb_targets = sorted(
+            full_dataset_manifest.loc[
+                full_dataset_manifest["dataset_mode"].astype(str) == "vdjdb",
+                "dataset_key",
+            ]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+        if vdjdb_targets:
+            requested_targets = resolve_vdjdb_target_keys(vdjdb_targets)
+            log_step(
+                "No datasets matched requested VDJdb targets; requested_targets={0}; available_vdjdb_targets={1}".format(
+                    ",".join(requested_targets),
+                    ",".join(available_vdjdb_targets) if available_vdjdb_targets else "none",
+                )
+            )
+        elif dataset_mode_filter == "vdjdb":
+            log_step(
+                "No VDJdb datasets available in dataset manifest; available_vdjdb_targets={0}".format(
+                    ",".join(available_vdjdb_targets) if available_vdjdb_targets else "none",
+                )
+            )
     log_step(
         "Built execution manifest for grid_size={0}; dataset_mode_filter={1}; yfv_donors={2}; dataset_rows={3}; grid_rows={4}; execution_rows={5}".format(
             grid_size,
