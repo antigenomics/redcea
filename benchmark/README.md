@@ -42,10 +42,18 @@ This grid keeps only `vdbscan_leiden`, varies `eps_k_neighbors`, `cluster_min_sa
 
 ### VDJdb / TCRvdb
 
-The low-noise benchmark uses:
+The low-noise benchmark defaults to:
 
 - `GLC`
 - `YLQ`
+
+The VDJdb target set is configurable through:
+
+- `BENCHMARK_VDJDB_TARGETS` for Slurm launches
+- `--vdjdb-targets` for direct `prepare_datasets.py` / `run_benchmark.py` calls
+
+Tokens may be either short keys such as `GLC,YLQ` or full epitope sequences such as
+`GILGFVFTL,NLVPMVATV,AVFDRKSDAK,ELAGIGILTV,RAKFKQLL`.
 
 All clonotypes are included during embedding and clustering. Only labeled clonotypes are used for classification metrics.
 
@@ -156,9 +164,13 @@ Optional environment variable:
 
 ```bash
 export BENCHMARK_ENV_ACTIVATE=/path/to/activate_script.sh
+export BENCHMARK_GRID_SIZE=focused_vdbscan_leiden
+export BENCHMARK_DATASET_MODE_FILTER=vdjdb
+export BENCHMARK_VDJDB_TARGETS=GILGFVFTL,NLVPMVATV,AVFDRKSDAK,ELAGIGILTV,RAKFKQLL
 ```
 
-If this variable is set, each Slurm job will source it before executing notebooks.
+If `BENCHMARK_ENV_ACTIVATE` is set, each Slurm job will source it before executing notebooks.
+The other variables shown above narrow the benchmark scope to a specific grid and VDJdb target subset.
 
 ## Outputs
 
