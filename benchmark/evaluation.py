@@ -21,22 +21,21 @@ def _fdr_bh(pvals):
     return out
 
 
+def _compute_vdjdb_recovered_mask(labeled_all: pd.DataFrame) -> pd.Series:
+    """Mark labeled clonotypes as recovered when they belong to any non-noise cluster."""
+    return (~labeled_all["is_noise"]) & (labeled_all["cluster_id"] >= 0)
+
+
 def _compute_vdjdb_metrics_for_frame(assignments: pd.DataFrame, metadata_row) -> dict[str, object] | None:
     if assignments.empty:
         return None
     run_id = str(assignments["run_id"].iloc[0])
     epitope = assignments["epitope"].iloc[0]
     cluster_df = assignments.loc[~assignments["is_noise"]]
-    labeled = cluster_df.loc[cluster_df["truth_label"].isin(["positive", "negative"])]
-    assoc = pd.Series(dtype=bool)
-    if not labeled.empty:
-        counts = labeled.groupby(["cluster_id", "truth_label"]).size().unstack(fill_value=0)
-        assoc = ((counts.get("positive", 0) > 0) & (counts.get("positive", 0) >= counts.get("negative", 0)))
-    associated_clusters = set(assoc[assoc].index.tolist())
     labeled_all = assignments.loc[assignments["truth_label"].isin(["positive", "negative"])]
     positives = labeled_all["truth_label"] == "positive"
     negatives = labeled_all["truth_label"] == "negative"
-    recovered = labeled_all["cluster_id"].isin(associated_clusters) & ~labeled_all["is_noise"]
+    recovered = _compute_vdjdb_recovered_mask(labeled_all)
     tp = int((positives & recovered).sum())
     fp = int((negatives & recovered).sum())
     fn = int((positives & ~recovered).sum())
