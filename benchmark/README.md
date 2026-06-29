@@ -51,9 +51,20 @@ The VDJdb target set is configurable through:
 
 - `BENCHMARK_VDJDB_TARGETS` for Slurm launches
 - `--vdjdb-targets` for direct `prepare_datasets.py` / `run_benchmark.py` calls
+- `BENCHMARK_VDJDB_TOP_INFECTIOUS` or `--vdjdb-top-infectious` for automatic top-K infectious epitope selection
 
 Tokens may be either short keys such as `GLC,YLQ` or full epitope sequences such as
 `GILGFVFTL,NLVPMVATV,AVFDRKSDAK,ELAGIGILTV,RAKFKQLL`.
+
+For arbitrary epitopes outside the historical alias list, pass the epitope sequences directly.
+The benchmark will look for the standard upstream files:
+
+- `trb_vdjdb_{EPITOPE}.tsv`
+- `trb_vdjdb_{EPITOPE}_sample_embeddings.parquet`
+
+The infectious selector reads `vdjdb.slim.txt`, keeps human `TRB` rows with non-self
+`antigen.species`, intersects them with the locally available TRB AIRR/embedding files, and
+takes the top K epitopes by record count.
 
 All clonotypes are included during embedding and clustering. Only labeled clonotypes are used for classification metrics.
 
@@ -175,10 +186,13 @@ export BENCHMARK_ENV_ACTIVATE=/path/to/activate_script.sh
 export BENCHMARK_GRID_SIZE=focused_vdbscan_leiden
 export BENCHMARK_DATASET_MODE_FILTER=vdjdb
 export BENCHMARK_VDJDB_TARGETS=GILGFVFTL,NLVPMVATV,AVFDRKSDAK,ELAGIGILTV,RAKFKQLL
+export BENCHMARK_VDJDB_TOP_INFECTIOUS=10
 ```
 
 If `BENCHMARK_ENV_ACTIVATE` is set, each Slurm job will source it before executing notebooks.
 The other variables shown above narrow the benchmark scope to a specific grid and VDJdb target subset.
+If `BENCHMARK_VDJDB_TOP_INFECTIOUS` is set, `prepare_datasets.py` will ignore `BENCHMARK_VDJDB_TARGETS`
+and build the manifest from the selected top-K infectious epitopes instead.
 
 ## Outputs
 

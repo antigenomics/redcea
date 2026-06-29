@@ -32,5 +32,11 @@ fi
 if [[ -n "${BENCHMARK_VDJDB_TARGETS:-}" ]]; then
   CMD+=(--vdjdb-targets "${BENCHMARK_VDJDB_TARGETS}")
 fi
+if [[ -n "${BENCHMARK_VDJDB_TOP_INFECTIOUS:-}" ]]; then
+  CMD+=(--vdjdb-top-infectious "${BENCHMARK_VDJDB_TOP_INFECTIOUS}")
+fi
+if [[ -n "${BENCHMARK_VDJDB_RELEASE_PATH:-}" ]]; then
+  CMD+=(--vdjdb-release-path "${BENCHMARK_VDJDB_RELEASE_PATH}")
+fi
 
 "${CMD[@]}"

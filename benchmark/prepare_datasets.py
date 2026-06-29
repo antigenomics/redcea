@@ -21,11 +21,13 @@ from benchmark.data_sources import (
     DEFAULT_VDJDB_BG_SOURCE_AIRR,
     DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
     DEFAULT_VDJDB_EMBED_DIR,
+    DEFAULT_VDJDB_RELEASE_PATH,
     DEFAULT_YFV_KNOWN_EPITOPES,
     DEFAULT_YFV_RUNS_DIR,
-    VDJDB_TARGETS,
     discover_yfv_donor_ids,
+    resolve_vdjdb_target_metadata,
     resolve_vdjdb_target_keys,
+    select_top_vdjdb_infectious_epitopes,
     resolve_tcrvdb_path,
     resolve_vdjdb_embedding_path,
     resolve_vdjdb_rep_path,
@@ -83,15 +85,16 @@ def build_results_only_dataset_manifest(*, redcea_runs_dir: str | Path = "result
                 continue
             dataset_key = parts[1].upper()
             key = ("vdjdb", dataset_key)
-            if key in seen_keys or dataset_key not in VDJDB_TARGETS:
+            if key in seen_keys:
                 continue
             seen_keys.add(key)
+            metadata = resolve_vdjdb_target_metadata(dataset_key)
             rows.append(
                 {
                     "dataset": "vdjdb_{0}".format(dataset_key.lower()),
                     "dataset_mode": "vdjdb",
                     "dataset_key": dataset_key,
-                    "epitope": VDJDB_TARGETS[dataset_key]["epitope_sequence"],
+                    "epitope": metadata["epitope_sequence"],
                     "donor_id": None,
                     "chain": "TRB",
                     "species": "HomoSapiens",
@@ -112,6 +115,19 @@ def _normalize_csv_tokens(raw_value: str | None) -> list[str] | None:
         return None
     tokens = [token.strip() for token in str(raw_value).split(",") if token.strip()]
     return tokens or None
+
+
+def _build_vdjdb_run_labels(target_keys: list[str]) -> dict[str, str]:
+    counts: dict[str, int] = {}
+    labels: dict[str, str] = {}
+    for target_key in target_keys:
+        metadata = resolve_vdjdb_target_metadata(target_key)
+        base = str(metadata["epitope_sequence"]).strip().upper()[:3]
+        base = "".join(char for char in base if char.isalnum()) or "vdj"
+        counts[base] = counts.get(base, 0) + 1
+        label = base if counts[base] == 1 else "{0}{1}".format(base, counts[base])
+        labels[str(target_key)] = label.lower()
+    return labels
 
 
 def build_vdjdb_truth_table(
@@ -255,11 +271,28 @@ def build_dataset_manifest(
     vdjdb_bg_airr: str | Path = DEFAULT_VDJDB_BG_SOURCE_AIRR,
     vdjdb_bg_embedding: str | Path = DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
     vdjdb_targets: list[str] | None = None,
+    vdjdb_top_infectious: int | None = None,
+    vdjdb_release_path: str | Path = DEFAULT_VDJDB_RELEASE_PATH,
     dataset_mode_filter: str = "all",
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     if dataset_mode_filter != "yfv":
-        selected_vdjdb_targets = resolve_vdjdb_target_keys(vdjdb_targets)
+        if vdjdb_top_infectious is not None:
+            selected_vdjdb_targets = select_top_vdjdb_infectious_epitopes(
+                top_k=int(vdjdb_top_infectious),
+                vdjdb_release_path=vdjdb_release_path,
+                embed_dir=vdjdb_embed_dir,
+                airr_dir=vdjdb_airr_dir,
+            )
+            log_step(
+                "Selected top infectious VDJdb epitopes count={0}: {1}".format(
+                    len(selected_vdjdb_targets),
+                    ",".join(selected_vdjdb_targets),
+                )
+            )
+        else:
+            selected_vdjdb_targets = resolve_vdjdb_target_keys(vdjdb_targets)
+        vdjdb_run_labels = _build_vdjdb_run_labels(selected_vdjdb_targets)
         vdjdb_background_airr = Path(vdjdb_bg_airr)
         vdjdb_background_embedding = Path(vdjdb_bg_embedding)
         log_step("Validating shared VDJdb background inputs")
@@ -272,7 +305,7 @@ def build_dataset_manifest(
             validate_embedding_airr_pair(rep_path, resolved["sample_embedding"])
             rows.append(
                 {
-                    "dataset": f"vdjdb_{target_key.lower()}",
+                    "dataset": f"vdjdb_{vdjdb_run_labels[str(target_key)]}",
                     "dataset_mode": "vdjdb",
                     "dataset_key": target_key,
                     "epitope": resolved["epitope_sequence"],
@@ -331,6 +364,8 @@ def write_processed_datasets(
     vdjdb_bg_embedding: str | Path = DEFAULT_VDJDB_BG_SOURCE_EMBEDDING,
     tcrvdb_path: str | Path = DEFAULT_TCRVDB_PATH,
     vdjdb_targets: list[str] | None = None,
+    vdjdb_top_infectious: int | None = None,
+    vdjdb_release_path: str | Path = DEFAULT_VDJDB_RELEASE_PATH,
     dataset_mode_filter: str = "all",
 ) -> dict[str, Path]:
     processed_dir = Path(processed_dir)
@@ -363,6 +398,8 @@ def write_processed_datasets(
             vdjdb_bg_airr=vdjdb_bg_airr,
             vdjdb_bg_embedding=vdjdb_bg_embedding,
             vdjdb_targets=vdjdb_targets,
+            vdjdb_top_infectious=vdjdb_top_infectious,
+            vdjdb_release_path=vdjdb_release_path,
             dataset_mode_filter=dataset_mode_filter,
         )
         if len(dataset_manifest):
@@ -376,7 +413,17 @@ def write_processed_datasets(
     except Exception as exc:
         log_step("Canonical dataset preparation is unavailable locally; falling back to results-only manifest. Reason: {0}".format(exc))
         dataset_manifest = build_results_only_dataset_manifest()
-        selected_vdjdb_targets = set(resolve_vdjdb_target_keys(vdjdb_targets))
+        if vdjdb_top_infectious is not None:
+            selected_vdjdb_targets = set(
+                select_top_vdjdb_infectious_epitopes(
+                    top_k=int(vdjdb_top_infectious),
+                    vdjdb_release_path=vdjdb_release_path,
+                    embed_dir=vdjdb_embed_dir,
+                    airr_dir=vdjdb_airr_dir,
+                )
+            )
+        else:
+            selected_vdjdb_targets = set(resolve_vdjdb_target_keys(vdjdb_targets))
         dataset_manifest = dataset_manifest.loc[
             dataset_manifest["dataset_mode"].ne("vdjdb")
             | dataset_manifest["dataset_key"].astype(str).isin(selected_vdjdb_targets)
@@ -405,6 +452,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vdjdb-airr-dir", default=str(DEFAULT_VDJDB_AIRR_DIR))
     parser.add_argument("--vdjdb-bg-airr", default=str(DEFAULT_VDJDB_BG_SOURCE_AIRR))
     parser.add_argument("--vdjdb-bg-embedding", default=str(DEFAULT_VDJDB_BG_SOURCE_EMBEDDING))
+    parser.add_argument("--vdjdb-release-path", default=str(DEFAULT_VDJDB_RELEASE_PATH))
     parser.add_argument("--tcrvdb-path", default=str(DEFAULT_TCRVDB_PATH))
     parser.add_argument("--processed-dir", default="data/processed")
     parser.add_argument("--dataset-mode-filter", choices=["all", "vdjdb", "yfv"], default="all")
@@ -415,6 +463,16 @@ def parse_args() -> argparse.Namespace:
             "Comma-separated VDJdb targets to prepare. Tokens may be short keys like "
             "'GLC,YLQ' or full epitope sequences like 'GILGFVFTL,NLVPMVATV'. "
             "Default: {0}".format(",".join(DEFAULT_VDJDB_BENCHMARK_TARGETS))
+        ),
+    )
+    parser.add_argument(
+        "--vdjdb-top-infectious",
+        type=int,
+        default=None,
+        help=(
+            "Select the top K infectious TRB epitopes from the VDJdb release file, "
+            "restricted to epitopes with available AIRR and embedding files. "
+            "If set, this overrides --vdjdb-targets."
         ),
     )
     return parser.parse_args()
@@ -429,8 +487,10 @@ def main() -> int:
         vdjdb_airr_dir=args.vdjdb_airr_dir,
         vdjdb_bg_airr=args.vdjdb_bg_airr,
         vdjdb_bg_embedding=args.vdjdb_bg_embedding,
+        vdjdb_release_path=args.vdjdb_release_path,
         tcrvdb_path=args.tcrvdb_path,
         vdjdb_targets=_normalize_csv_tokens(args.vdjdb_targets),
+        vdjdb_top_infectious=args.vdjdb_top_infectious,
         dataset_mode_filter=args.dataset_mode_filter,
     )
     for name, path in output_paths.items():

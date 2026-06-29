@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pandas as pd
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SIBLING_PROJECTS_ROOT = REPO_ROOT.parent
@@ -66,6 +68,56 @@ VDJDB_TARGETS = {
 
 DEFAULT_VDJDB_BENCHMARK_TARGETS = ("GLC", "YLQ")
 
+NON_INFECTIOUS_ANTIGEN_SPECIES = {
+    "",
+    "HomoSapiens",
+    "MusMusculus",
+}
+
+
+def _normalize_epitope_token(token: str) -> str:
+    return str(token).strip().upper()
+
+
+def _alias_by_epitope() -> dict[str, str]:
+    return {
+        _normalize_epitope_token(target["epitope_sequence"]): key
+        for key, target in VDJDB_TARGETS.items()
+    }
+
+
+def resolve_vdjdb_release_path(path=DEFAULT_VDJDB_RELEASE_PATH):
+    resolved = Path(path).expanduser()
+    if resolved.exists():
+        return resolved
+    repo_fallback = REPO_ROOT / "notebooks" / "ebv" / "vdjdb.slim.txt"
+    if repo_fallback.exists():
+        return repo_fallback
+    return resolved
+
+
+def resolve_vdjdb_target_metadata(target_token: str) -> dict[str, str]:
+    token = _normalize_epitope_token(target_token)
+    if token in VDJDB_TARGETS:
+        target = VDJDB_TARGETS[token]
+        return {
+            "target_key": token,
+            "epitope_sequence": str(target["epitope_sequence"]),
+            "embedding_filename": str(target["embedding_filename"]),
+            "index_filename": str(target["index_filename"]),
+            "representation_filename": str(target["representation_filename"]),
+        }
+    alias_by_epitope = _alias_by_epitope()
+    if token in alias_by_epitope:
+        return resolve_vdjdb_target_metadata(alias_by_epitope[token])
+    return {
+        "target_key": token,
+        "epitope_sequence": token,
+        "embedding_filename": "trb_vdjdb_{0}_sample_embeddings.parquet".format(token),
+        "index_filename": "trb_vdjdb_{0}_sample_embeddings.index".format(token),
+        "representation_filename": "trb_vdjdb_{0}.tsv".format(token),
+    }
+
 
 def resolve_vdjdb_target_keys(target_tokens=None):
     if target_tokens is None:
@@ -73,36 +125,86 @@ def resolve_vdjdb_target_keys(target_tokens=None):
     normalized_tokens = [str(token).strip() for token in target_tokens if str(token).strip()]
     if not normalized_tokens:
         return list(DEFAULT_VDJDB_BENCHMARK_TARGETS)
-    epitope_to_key = {
-        str(target["epitope_sequence"]).upper(): key for key, target in VDJDB_TARGETS.items()
-    }
+    epitope_to_key = _alias_by_epitope()
     resolved_keys = []
     seen_keys = set()
-    unknown_tokens = []
     for token in normalized_tokens:
-        token_upper = token.upper()
-        key = None
+        token_upper = _normalize_epitope_token(token)
         if token_upper in VDJDB_TARGETS:
             key = token_upper
         elif token_upper in epitope_to_key:
             key = epitope_to_key[token_upper]
-        if key is None:
-            unknown_tokens.append(token)
-            continue
+        else:
+            key = token_upper
         if key not in seen_keys:
             seen_keys.add(key)
             resolved_keys.append(key)
-    if unknown_tokens:
-        known_tokens = sorted(
-            set(list(VDJDB_TARGETS.keys()) + [target["epitope_sequence"] for target in VDJDB_TARGETS.values()])
-        )
-        raise KeyError(
-            "Unknown VDJdb target token(s): {0}. Known keys/sequences: {1}".format(
-                ",".join(unknown_tokens),
-                ",".join(known_tokens),
-            )
-        )
     return resolved_keys
+
+
+def discover_available_vdjdb_epitopes(
+    embed_dir=DEFAULT_VDJDB_EMBED_DIR,
+    airr_dir=DEFAULT_VDJDB_AIRR_DIR,
+) -> set[str]:
+    embed_dir = Path(embed_dir)
+    airr_dir = Path(airr_dir)
+    embed_pattern = re.compile(r"^trb_vdjdb_(?P<epitope>[A-Z0-9]+)_sample_embeddings\.parquet$")
+    airr_pattern = re.compile(r"^trb_vdjdb_(?P<epitope>[A-Z0-9]+)\.tsv$")
+    embed_epitopes = set()
+    airr_epitopes = set()
+    if embed_dir.exists():
+        for path in embed_dir.glob("trb_vdjdb_*_sample_embeddings.parquet"):
+            match = embed_pattern.fullmatch(path.name)
+            if match is not None:
+                embed_epitopes.add(match.group("epitope"))
+    if airr_dir.exists():
+        for path in airr_dir.glob("trb_vdjdb_*.tsv"):
+            match = airr_pattern.fullmatch(path.name)
+            if match is not None:
+                airr_epitopes.add(match.group("epitope"))
+    if embed_epitopes and airr_epitopes:
+        return embed_epitopes & airr_epitopes
+    return embed_epitopes or airr_epitopes
+
+
+def select_top_vdjdb_infectious_epitopes(
+    *,
+    top_k: int,
+    vdjdb_release_path=DEFAULT_VDJDB_RELEASE_PATH,
+    embed_dir=DEFAULT_VDJDB_EMBED_DIR,
+    airr_dir=DEFAULT_VDJDB_AIRR_DIR,
+) -> list[str]:
+    if int(top_k) < 1:
+        raise ValueError("top_k must be positive")
+    release_path = resolve_vdjdb_release_path(vdjdb_release_path)
+    if not release_path.exists():
+        raise FileNotFoundError("VDJdb release file is missing: {0}".format(release_path))
+    frame = pd.read_csv(release_path, sep="\t")
+    required_columns = {"gene", "species", "antigen.epitope", "antigen.species"}
+    missing_columns = sorted(required_columns - set(frame.columns))
+    if missing_columns:
+        raise KeyError(
+            "VDJdb release file is missing required columns: {0}".format(",".join(missing_columns))
+        )
+    available_epitopes = discover_available_vdjdb_epitopes(embed_dir=embed_dir, airr_dir=airr_dir)
+    infectious = frame.loc[
+        frame["gene"].astype(str).eq("TRB")
+        & frame["species"].astype(str).eq("HomoSapiens")
+        & frame["antigen.epitope"].notna()
+        & ~frame["antigen.species"].fillna("").astype(str).isin(NON_INFECTIOUS_ANTIGEN_SPECIES)
+    ].copy()
+    if available_epitopes:
+        infectious = infectious.loc[
+            infectious["antigen.epitope"].astype(str).isin(sorted(available_epitopes))
+        ].copy()
+    ranked = (
+        infectious.groupby(["antigen.epitope", "antigen.species"], dropna=False)
+        .size()
+        .reset_index(name="n_records")
+        .sort_values(["n_records", "antigen.epitope"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+    return ranked["antigen.epitope"].astype(str).head(int(top_k)).tolist()
 
 def _split_yfv_donor_id(donor_id):
     subject, replicate = donor_id.split("_", 1)
@@ -166,19 +268,19 @@ def discover_yfv_donor_ids(runs_dir=DEFAULT_YFV_RUNS_DIR):
 
 
 def resolve_vdjdb_embedding_path(target_key, embed_dir=DEFAULT_VDJDB_EMBED_DIR):
-    target = VDJDB_TARGETS[target_key]
+    target = resolve_vdjdb_target_metadata(target_key)
     embed_dir = Path(embed_dir)
     return {
-        "target_key": target_key,
+        "target_key": target["target_key"],
         "epitope_sequence": target["epitope_sequence"],
-        "sample_embedding": embed_dir / target["embedding_filename"],
-        "sample_index": embed_dir / target["index_filename"],
+        "sample_embedding": embed_dir / str(target["embedding_filename"]),
+        "sample_index": embed_dir / str(target["index_filename"]),
     }
 
 def resolve_vdjdb_rep_path(target_key, airr_dir=DEFAULT_VDJDB_AIRR_DIR):
-    target = VDJDB_TARGETS[target_key]
+    target = resolve_vdjdb_target_metadata(target_key)
     airr_dir = Path(airr_dir)
-    return airr_dir / target["representation_filename"]
+    return airr_dir / str(target["representation_filename"])
 
 
 def resolve_tcrvdb_path(path=DEFAULT_TCRVDB_PATH):
