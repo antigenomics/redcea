@@ -79,7 +79,7 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
         cluster_algo="leiden",
         n_bg_points=None,
         cluster_pc_components=2,
-        cluster_min_samples=1,
+        core_min_samples=1,
         k_neighbors=2,
         eps_k_neighbors=2,
         leiden_resolution=1.0,
@@ -88,6 +88,9 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
         vdbscan_sym_rule="asymmetric",
         use_clonotype_counts=True,
         enrichment_test="zbinom",
+        debug_save_intermediate=False,
+        debug_output_dir=None,
+        add_auxiliary_cluster_metrics=True,
     )
 
     monkeypatch.setattr(pipeline, "configure_logging", lambda *args, **kwargs: None)
@@ -138,8 +141,34 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
         "build_joint_knn_artifacts",
         lambda **kwargs: types.SimpleNamespace(
             data_reduced=np.zeros((5, 2), dtype="float32"),
-            distances=np.zeros((5, 2), dtype="float32"),
-            indices=np.zeros((5, 2), dtype="int32"),
+            distances=np.array(
+                [
+                    [0.0, 0.1],
+                    [0.0, 0.1],
+                    [0.0, 0.3],
+                    [0.0, 0.1],
+                    [0.0, 0.3],
+                ],
+                dtype="float32",
+            ),
+            indices=np.array(
+                [
+                    [0, 1],
+                    [1, 0],
+                    [2, 4],
+                    [3, 0],
+                    [4, 2],
+                ],
+                dtype="int32",
+            ),
+            ind_ss=np.array(
+                [
+                    [0, 1],
+                    [1, 0],
+                    [2, 1],
+                ],
+                dtype="int32",
+            ),
             dist_ss=np.zeros((3, 2), dtype="float32"),
             dist_bb=np.zeros((2, 2), dtype="float32"),
         ),
@@ -212,5 +241,7 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
     assert {"enrichment_pvalue_zbinom", "enrichment_fdr_zbinom"} <= set(summary.columns)
     assert {"enrichment_pvalue_betabinom_expansion", "enrichment_fdr_betabinom_expansion"} <= set(summary.columns)
     assert "count" in clusters.columns
+    assert "log2fc_smooth" in summary.columns
+    assert "density_validity" in summary.columns
     assert not enriched.empty
     assert set(enriched["cluster_id"]) == {0, 1}

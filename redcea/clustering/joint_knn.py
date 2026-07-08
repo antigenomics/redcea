@@ -16,6 +16,7 @@ class JointKnnArtifacts:
     distances: object
     indices: object
     dist_ss: object
+    ind_ss: object
     dist_bb: object
 
 
@@ -69,6 +70,7 @@ def build_joint_knn_artifacts(
         distances=distances,
         indices=indices,
         dist_ss=dist_ss,
+        ind_ss=ind_ss,
         dist_bb=dist_bb,
     )
 

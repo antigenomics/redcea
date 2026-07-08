@@ -36,6 +36,10 @@ class PipelineArtifacts:
 def get_enrichment_column_names(enrichment_test: str) -> tuple[str, str]:
     if enrichment_test == "zbinom":
         return "enrichment_pvalue_zbinom", "enrichment_fdr_zbinom"
+    if enrichment_test == "binom":
+        return "enrichment_pvalue_binom", "enrichment_fdr_binom"
+    if enrichment_test == "fisher":
+        return "enrichment_pvalue_fisher", "enrichment_fdr_fisher"
     raise ValueError(f"Unsupported enrichment_test: {enrichment_test}")
 
 

@@ -17,17 +17,26 @@ from .cdr3_grouping import (
     map_len_to_group_id,
 )
 
-from .faiss_cache import (
-    compute_split_knn,
-    compute_blockwise_knn_merged,  # compatibility alias for split knn
-)
-
-from .knn_merge import build_joint_knn_from_split
-from .joint_knn import JointKnnArtifacts, build_joint_knn_artifacts
+try:
+    from .faiss_cache import (
+        compute_split_knn,
+        compute_blockwise_knn_merged,  # compatibility alias for split knn
+    )
+    from .knn_merge import build_joint_knn_from_split
+    from .joint_knn import JointKnnArtifacts, build_joint_knn_artifacts
+except Exception:  # pragma: no cover - optional FAISS-backed imports
+    compute_split_knn = None
+    compute_blockwise_knn_merged = None
+    build_joint_knn_from_split = None
+    JointKnnArtifacts = None
+    build_joint_knn_artifacts = None
 
 from .vdbscan import vdbscan_from_knn
 
-from .pipeline_joint import run_joint_vdbscan
+try:
+    from .pipeline_joint import run_joint_vdbscan
+except Exception:  # pragma: no cover - optional FAISS-backed imports
+    run_joint_vdbscan = None
 
 from .cluster_methods import (
     run_dbscan_clustering,
@@ -35,6 +44,7 @@ from .cluster_methods import (
     run_joint_clustering,
     hierarchical_leiden_clustering,
     hierarchical_leiden_dbscan_clustering,
+    hierarchical_vdbscan_leiden_clustering,
 )
 
 __all__ = [
@@ -75,4 +85,5 @@ __all__ = [
     "run_joint_clustering",
     "hierarchical_leiden_clustering",
     "hierarchical_leiden_dbscan_clustering",
+    "hierarchical_vdbscan_leiden_clustering",
 ]

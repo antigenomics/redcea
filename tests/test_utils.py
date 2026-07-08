@@ -4,10 +4,12 @@ import numpy as np
 import pandas as pd
 from scipy.stats import betabinom
 
+from redcea.analysis.io import get_enrichment_column_names
 from redcea.utils.paths import resolve_embedding_file
 from redcea.utils.stats import (
     _fdr_bh,
     add_beta_binom_pvalues,
+    add_binom_pvalues,
     add_count_frequency_columns,
     add_log_fold_change,
     add_z_binom_pvalues,
@@ -100,3 +102,22 @@ def test_count_aware_betabinom_expansion_is_two_sided():
     )
     actual = summary.loc[summary["cluster_id"] == 1, "enrichment_pvalue_betabinom_expansion"].iat[0]
     assert np.isclose(actual, expected)
+
+
+def test_binom_helper_and_enrichment_column_names():
+    summary = pd.DataFrame(
+        {
+            "cluster_id": [1, 2],
+            "sample": [10, 1],
+            "background": [2, 8],
+        }
+    )
+
+    summary = add_binom_pvalues(summary, total_sample=20, total_background=20)
+    pvalue_col, fdr_col = get_enrichment_column_names("binom")
+
+    assert pvalue_col == "enrichment_pvalue_binom"
+    assert fdr_col == "enrichment_fdr_binom"
+    assert pvalue_col in summary.columns
+    assert fdr_col in summary.columns
+    assert np.all((summary[fdr_col] >= 0) & (summary[fdr_col] <= 1))

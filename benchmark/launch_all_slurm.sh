@@ -1,0 +1,39 @@
+#!/bin/bash
+set -euo pipefail
+
+ROOT_DIR="$(pwd)"
+if [[ ! -d "$ROOT_DIR/benchmark/slurm" ]]; then
+  echo "Run benchmark/launch_all_slurm.sh from the repository root." >&2
+  exit 1
+fi
+SLURM_DIR="$ROOT_DIR/benchmark/slurm"
+
+submit_job() {
+  local dependency="$1"
+  local script_path="$2"
+  local output
+  if [[ -n "$dependency" ]]; then
+    output="$(sbatch --parsable --export=ALL --dependency=afterok:${dependency} "$script_path")"
+  else
+    output="$(sbatch --parsable --export=ALL "$script_path")"
+  fi
+  echo "$output"
+}
+
+job01="$(submit_job "" "$SLURM_DIR/run_01_prepare_datasets.sbatch")"
+job02="$(submit_job "$job01" "$SLURM_DIR/run_02_density_by_length.sbatch")"
+job03="$(submit_job "$job01" "$SLURM_DIR/run_03_build_manifests.sbatch")"
+job03_dispatch="$(sbatch --parsable --dependency=afterok:${job03} --export=ALL,DENSITY_JOB_ID=${job02} "$SLURM_DIR/run_03_dispatch_arrays.sbatch")"
+
+echo "Submitted benchmark jobs:"
+echo "  BENCHMARK_GRID_SIZE:            ${BENCHMARK_GRID_SIZE:-small}"
+echo "  BENCHMARK_PYTHON:               ${BENCHMARK_PYTHON:-auto}"
+echo "  BENCHMARK_DATASET_MODE_FILTER:  ${BENCHMARK_DATASET_MODE_FILTER:-all}"
+echo "  BENCHMARK_VDJDB_TARGETS:        ${BENCHMARK_VDJDB_TARGETS:-default}"
+echo "  BENCHMARK_VDJDB_TOP_INFECTIOUS: ${BENCHMARK_VDJDB_TOP_INFECTIOUS:-unset}"
+echo "  BENCHMARK_VDJDB_RELEASE_PATH:   ${BENCHMARK_VDJDB_RELEASE_PATH:-auto}"
+echo "  BENCHMARK_YFV_DONOR_IDS:        ${BENCHMARK_YFV_DONOR_IDS:-all}"
+echo "  01_prepare_datasets:            $job01"
+echo "  02_density_by_length:           $job02"
+echo "  03_build_manifests:             $job03"
+echo "  03_dispatch_arrays:             $job03_dispatch"

@@ -232,6 +232,9 @@ def compute_split_knn(
 
     Distances are L2 (NOT squared). Strict: NaN/inf -> raise.
     """
+    # Legacy semantics: k_neighbors is the total number of returned neighbors,
+    # including the self-match in one of the columns.
+    self_k = int(k_neighbors)
 
     if isinstance(sample, pd.DataFrame):
         sample_arr = sample.to_numpy()
@@ -316,7 +319,7 @@ def compute_split_knn(
             data=sample_arr,
             index_path=sample_index_path,
             knn_prefix=sample_self_prefix,
-            k=k_neighbors,
+            k=self_k,
             rebuild_index=rebuild_sample,
             rebuild_knn=rebuild_sample_knn,
             nproc=nproc,
@@ -327,7 +330,7 @@ def compute_split_knn(
             data=bg_arr,
             index_path=bg_index_path,
             knn_prefix=bg_self_prefix,
-            k=k_neighbors,
+            k=self_k,
             rebuild_index=rebuild_bg,
             rebuild_knn=rebuild_bg_knn,
             nproc=nproc,
@@ -338,8 +341,8 @@ def compute_split_knn(
         bg_index = _build_or_load_index(bg_arr, bg_index_path, rebuild_bg, nproc=nproc)
 
         faiss.omp_set_num_threads(int(nproc))
-        dist_ss_sq, ind_ss = sample_index.search(sample_arr, int(k_neighbors))
-        dist_bb_sq, ind_bb = bg_index.search(bg_arr, int(k_neighbors))
+        dist_ss_sq, ind_ss = sample_index.search(sample_arr, self_k)
+        dist_bb_sq, ind_bb = bg_index.search(bg_arr, self_k)
 
         dist_ss = _squared_l2_to_l2_inplace(np.asarray(dist_ss_sq, dtype=np.float32), name="dist_ss_sq")
         dist_bb = _squared_l2_to_l2_inplace(np.asarray(dist_bb_sq, dtype=np.float32), name="dist_bb_sq")
@@ -352,7 +355,7 @@ def compute_split_knn(
         db=bg_arr,
         db_index_path=bg_index_path,
         rebuild_db_index=rebuild_bg,
-        k=k_neighbors,
+        k=self_k,
         nproc=nproc,
     )
 
@@ -361,7 +364,7 @@ def compute_split_knn(
         db=sample_arr,
         db_index_path=sample_index_path,
         rebuild_db_index=rebuild_sample,
-        k=k_neighbors,
+        k=self_k,
         nproc=nproc,
     )
 
