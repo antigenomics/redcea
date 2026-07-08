@@ -25,10 +25,11 @@ LOG_DIR="logs_yfv_redcea"
 
 CHAIN="TRB"
 NPROC="${SLURM_CPUS_PER_TASK:-16}"
-CLUSTER_ALGO="vdbscan"
+CLUSTER_ALGO="vdbscan_leiden"
 K_NEIGHBORS="20"
 EPS_K_NEIGHBORS="8"
-CLUSTER_MIN_SAMPLES="5"
+CLUSTER_MIN_SAMPLES="3"
+LEIDEN_RESOLUTION="1"
 
 SUBJECT="${DONOR_ID%%_*}"
 REPLICATE="${DONOR_ID#*_}"
@@ -66,5 +67,6 @@ redcea \
   --k-neighbors "$K_NEIGHBORS" \
   --eps-k-neighbors "$EPS_K_NEIGHBORS" \
   --cluster-min-samples "$CLUSTER_MIN_SAMPLES" \
+  --leiden-resolution "$LEIDEN_RESOLUTION" \
   --enrichment-test zbinom \
   --use-clonotype-counts
