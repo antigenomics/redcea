@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from scipy.stats import binom, fisher_exact, norm
+from scipy.stats import betabinom, binom, fisher_exact, norm
 
 
 def _fdr_bh(pvals: list[float]) -> np.ndarray:
@@ -64,6 +64,35 @@ def add_z_binom_pvalues(summary: pd.DataFrame, total_sample: int, total_backgrou
     return summary
 
 
+def add_beta_binom_pvalues(summary: pd.DataFrame, total_sample: float, total_background: float) -> pd.DataFrame:
+    pvals = []
+    total_sample = float(total_sample)
+    total_background = float(total_background)
+    eps = np.finfo(float).eps
+
+    for _, row in summary.iterrows():
+        k_sample = float(row.get("sample_count_sum", 0.0))
+        k_background = float(row.get("background_count_sum", 0.0))
+
+        if total_sample <= 0 or total_background <= 0:
+            pvals.append(1.0)
+            continue
+
+        bg_usage = k_background / total_background
+        a = float(np.clip(bg_usage * total_background, eps, None))
+        b = float(np.clip((1.0 - bg_usage) * total_background, eps, None))
+
+        observed = int(round(k_sample))
+        n = int(round(total_sample))
+        left_tail = float(betabinom.cdf(observed, n=n, a=a, b=b))
+        right_tail = float(betabinom.sf(observed - 1, n=n, a=a, b=b))
+        pvals.append(float(min(1.0, 2.0 * min(left_tail, right_tail))))
+
+    summary["enrichment_pvalue_betabinom_expansion"] = pvals
+    summary["enrichment_fdr_betabinom_expansion"] = _fdr_bh(pvals)
+    return summary
+
+
 def add_log_fold_change(summary: pd.DataFrame, total_sample: int, total_background: int) -> pd.DataFrame:
     log_fc = []
     for _, row in summary.iterrows():
@@ -72,5 +101,21 @@ def add_log_fold_change(summary: pd.DataFrame, total_sample: int, total_backgrou
         fold_enrichment = ((a + 1e-9) / total_sample) / ((b + 1e-9) / total_background)
         log_fc.append(np.log10(fold_enrichment))
     summary["log_fold_change"] = log_fc
+    return summary
+
+
+def add_count_frequency_columns(summary: pd.DataFrame, total_sample: float, total_background: float) -> pd.DataFrame:
+    if "sample_count_sum" not in summary.columns or "background_count_sum" not in summary.columns:
+        return summary
+
+    total_sample = float(total_sample)
+    total_background = float(total_background)
+    summary["sample_frequency"] = summary["sample_count_sum"].astype(float) / total_sample if total_sample > 0 else 0.0
+    summary["background_frequency"] = (
+        summary["background_count_sum"].astype(float) / total_background if total_background > 0 else 0.0
+    )
+    summary["expansion_log_fold_change"] = np.log10(
+        (summary["sample_count_sum"].astype(float) + 1e-9) / max(total_sample, 1e-9)
+    ) - np.log10((summary["background_count_sum"].astype(float) + 1e-9) / max(total_background, 1e-9))
     return summary
 

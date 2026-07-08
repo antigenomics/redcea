@@ -10,12 +10,23 @@ import pandas as pd
 from mir.common.segments import SegmentLibrary
 
 from redcea.analysis.cluster_utils import compute_cluster_summary
-from redcea.analysis.io import EmbeddingArtifacts, PipelineArtifacts, load_embedding_artifacts, save_pipeline_outputs
+from redcea.analysis.io import (
+    EmbeddingArtifacts,
+    PipelineArtifacts,
+    get_enrichment_column_names,
+    load_embedding_artifacts,
+    save_pipeline_outputs,
+)
 from redcea.clustering import build_joint_knn_artifacts, run_joint_clustering
 from redcea.config import PipelineConfig, normalize_pipeline_config
 from redcea.embeddings import compute_embeddings_if_needed
 from redcea.utils.paths import resolve_prototype_file
-from redcea.utils.stats import add_log_fold_change, add_z_binom_pvalues
+from redcea.utils.stats import (
+    add_beta_binom_pvalues,
+    add_count_frequency_columns,
+    add_log_fold_change,
+    add_z_binom_pvalues,
+)
 from redcea.utils.tcremp import (
     configure_logging,
     generate_output_prefix,
@@ -98,6 +109,7 @@ def compute_cluster_labels(
 
 def build_pipeline_artifacts(
     *,
+    config: PipelineConfig,
     cluster_labels,
     joint_ids: pd.Series,
     joint_representations: pd.DataFrame,
@@ -112,14 +124,31 @@ def build_pipeline_artifacts(
         joint_representations=joint_representations,
     )
     summary_df = compute_cluster_summary(cluster_df, sample_ids)
-    summary_df = add_z_binom_pvalues(summary_df, total_sample=len(sample_ids), total_background=len(background_ids))
+    if config.use_clonotype_counts:
+        sample_total_count = float(sample_artifacts_count(cluster_df))
+        background_total_count = float(background_artifacts_count(cluster_df))
+        summary_df = add_count_frequency_columns(
+            summary_df,
+            total_sample=sample_total_count,
+            total_background=background_total_count,
+        )
+        summary_df = add_beta_binom_pvalues(
+            summary_df,
+            total_sample=sample_total_count,
+            total_background=background_total_count,
+        )
+    if config.enrichment_test == "zbinom":
+        summary_df = add_z_binom_pvalues(summary_df, total_sample=len(sample_ids), total_background=len(background_ids))
+    else:
+        raise ValueError(f"Unsupported enrichment_test: {config.enrichment_test}")
     summary_df = add_log_fold_change(summary_df, total_sample=len(sample_ids), total_background=len(background_ids))
 
+    pvalue_col, fdr_col = get_enrichment_column_names(config.enrichment_test)
     enriched_clusters = summary_df.loc[
-        (summary_df["enrichment_fdr_zbinom"] < 0.05) & (summary_df["log_fold_change"] > 0),
-        ["cluster_id", "enrichment_pvalue_zbinom"],
+        (summary_df[fdr_col] < 0.05) & (summary_df["log_fold_change"] > 0),
+        ["cluster_id", pvalue_col],
     ]
-    logging.info("%d clusters identified as enriched (fdr < 0.05, logFC > 0).", len(enriched_clusters))
+    logging.info("%d clusters identified as enriched by %s (fdr < 0.05, log_fold_change > 0).", len(enriched_clusters), config.enrichment_test)
 
     enriched_clonotypes_df = cluster_df.merge(enriched_clusters, on="cluster_id")
 
@@ -136,20 +165,38 @@ def _build_cluster_df(
     joint_ids: pd.Series,
     joint_representations: pd.DataFrame,
 ) -> pd.DataFrame:
+    def _with_source(frame: pd.DataFrame) -> pd.DataFrame:
+        if "source" in frame.columns:
+            return frame
+        frame = frame.copy()
+        frame["source"] = frame["clone_id"].astype(str).str.startswith("s_").map({True: "sample", False: "background"})
+        return frame
+
     if (
         "clone_id" in joint_representations.columns
         and len(joint_representations) == len(joint_ids)
         and joint_representations["clone_id"].reset_index(drop=True).equals(joint_ids.reset_index(drop=True))
     ):
-        cluster_df = joint_representations.copy()
+        cluster_df = _with_source(joint_representations)
         insert_at = cluster_df.columns.get_loc("clone_id") + 1
         cluster_df.insert(insert_at, "cluster_id", cluster_labels)
         return cluster_df
 
-    return pd.DataFrame({"clone_id": joint_ids, "cluster_id": cluster_labels}).merge(
+    cluster_df = pd.DataFrame({"clone_id": joint_ids, "cluster_id": cluster_labels}).merge(
         joint_representations,
         on="clone_id",
     )
+    return _with_source(cluster_df)
+
+
+def sample_artifacts_count(cluster_df: pd.DataFrame) -> float:
+    sample_df = cluster_df.loc[cluster_df["source"] == "sample"]
+    return float(sample_df["count"].sum()) if "count" in sample_df.columns else float(len(sample_df))
+
+
+def background_artifacts_count(cluster_df: pd.DataFrame) -> float:
+    background_df = cluster_df.loc[cluster_df["source"] == "background"]
+    return float(background_df["count"].sum()) if "count" in background_df.columns else float(len(background_df))
 
 
 def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
@@ -224,6 +271,7 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     )
 
     artifacts = build_pipeline_artifacts(
+        config=config,
         cluster_labels=cluster_labels,
         joint_ids=joint_ids,
         joint_representations=joint_representations,
@@ -233,7 +281,12 @@ def run_redcea_pipeline(config_or_args) -> PipelineArtifacts:
     del sample_artifacts.embeddings
     del background_artifacts.embeddings
     gc.collect()
-    save_pipeline_outputs(artifacts, output_path=runtime.output_path, prefix=runtime.prefix)
+    save_pipeline_outputs(
+        artifacts,
+        output_path=runtime.output_path,
+        prefix=runtime.prefix,
+        enrichment_test=config.enrichment_test,
+    )
 
     logging.info("RedCEA pipeline completed.")
     log_memory_usage("Finished")

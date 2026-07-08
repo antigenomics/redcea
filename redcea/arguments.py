@@ -119,6 +119,18 @@ def add_redcea_pipeline_args(parser: argparse.ArgumentParser) -> argparse.Argume
         choices=["asymmetric", "min", "max"],
         help="Symmetrization rule for vDBSCAN.",
     )
+    parser.add_argument(
+        "--use-clonotype-counts",
+        action="store_true",
+        help="Read clonotype usage counts from the AIRR 'count' column and propagate them into enrichment summary/output tables.",
+    )
+    parser.add_argument(
+        "--enrichment-test",
+        type=str,
+        default="zbinom",
+        choices=["zbinom"],
+        help="Statistical test used for cluster enrichment.",
+    )
     return parser
 
 def build_enrich_parser() -> argparse.ArgumentParser:

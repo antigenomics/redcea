@@ -28,8 +28,8 @@ class _FakeRepertoire:
 def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
     sample_path = tmp_path / "sample.tsv"
     background_path = tmp_path / "background.tsv"
-    sample_path.write_text("dummy\n", encoding="utf-8")
-    background_path.write_text("dummy\n", encoding="utf-8")
+    sample_path.write_text("index\tcount\tjunction_aa\tv_call\tj_call\tlocus\n0\t20\tCASS0\tTRBV1\tTRBJ1\tbeta\n1\t15\tCASS1\tTRBV1\tTRBJ1\tbeta\n2\t2\tCASS2\tTRBV1\tTRBJ1\tbeta\n", encoding="utf-8")
+    background_path.write_text("index\tcount\tjunction_aa\tv_call\tj_call\tlocus\n10\t1\tCASS10\tTRBV1\tTRBJ1\tbeta\n11\t8\tCASS11\tTRBV1\tTRBJ1\tbeta\n", encoding="utf-8")
 
     fake_faiss = types.SimpleNamespace(
         omp_set_num_threads=lambda n: None,
@@ -86,6 +86,8 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
         leiden_sub_resolution=1.0,
         eps_estimation_based_on="sample",
         vdbscan_sym_rule="asymmetric",
+        use_clonotype_counts=True,
+        enrichment_test="zbinom",
     )
 
     monkeypatch.setattr(pipeline, "configure_logging", lambda *args, **kwargs: None)
@@ -176,4 +178,8 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
     assert not artifacts.summary_df.empty
     assert set(clusters["source"]) == {"sample", "background"}
     assert {"cluster_id", "cluster_size", "sample", "background", "log_fold_change"} <= set(summary.columns)
+    assert {"sample_count_sum", "background_count_sum", "sample_frequency", "background_frequency", "expansion_log_fold_change"} <= set(summary.columns)
+    assert {"enrichment_pvalue_zbinom", "enrichment_fdr_zbinom"} <= set(summary.columns)
+    assert {"enrichment_pvalue_betabinom_expansion", "enrichment_fdr_betabinom_expansion"} <= set(summary.columns)
+    assert "count" in clusters.columns
     assert not enriched.empty

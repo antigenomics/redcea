@@ -35,6 +35,8 @@ class PipelineConfig:
     cluster_algo: str
     eps_estimation_based_on: str
     vdbscan_sym_rule: str
+    use_clonotype_counts: bool
+    enrichment_test: str
 
     @classmethod
     def from_args(cls, args: Any) -> "PipelineConfig":
@@ -66,6 +68,8 @@ class PipelineConfig:
             cluster_algo=args.cluster_algo,
             eps_estimation_based_on=args.eps_estimation_based_on,
             vdbscan_sym_rule=args.vdbscan_sym_rule,
+            use_clonotype_counts=getattr(args, "use_clonotype_counts", False),
+            enrichment_test=getattr(args, "enrichment_test", "zbinom"),
         )
 
     @property

@@ -2,9 +2,16 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import betabinom
 
 from redcea.utils.paths import resolve_embedding_file
-from redcea.utils.stats import _fdr_bh, add_log_fold_change, add_z_binom_pvalues
+from redcea.utils.stats import (
+    _fdr_bh,
+    add_beta_binom_pvalues,
+    add_count_frequency_columns,
+    add_log_fold_change,
+    add_z_binom_pvalues,
+)
 
 
 def test_fdr_bh_returns_monotone_qvalues_in_original_order():
@@ -48,3 +55,48 @@ def test_enrichment_helpers_add_expected_columns():
     assert np.all((summary["enrichment_fdr_zbinom"] >= 0) & (summary["enrichment_fdr_zbinom"] <= 1))
     assert summary.loc[summary["cluster_id"] == 1, "log_fold_change"].iat[0] > 0
     assert summary.loc[summary["cluster_id"] == 3, "log_fold_change"].iat[0] < 0
+
+
+def test_count_aware_enrichment_helpers_add_expected_columns():
+    summary = pd.DataFrame(
+        {
+            "cluster_id": [1, 2, 3],
+            "sample_count_sum": [50.0, 5.0, 1.0],
+            "background_count_sum": [5.0, 5.0, 20.0],
+        }
+    )
+
+    summary = add_count_frequency_columns(summary, total_sample=100.0, total_background=100.0)
+    summary = add_beta_binom_pvalues(summary, total_sample=100.0, total_background=100.0)
+
+    assert {"sample_frequency", "background_frequency", "expansion_log_fold_change"} <= set(summary.columns)
+    assert {"enrichment_pvalue_betabinom_expansion", "enrichment_fdr_betabinom_expansion"} <= set(summary.columns)
+    assert np.all((summary["enrichment_fdr_betabinom_expansion"] >= 0) & (summary["enrichment_fdr_betabinom_expansion"] <= 1))
+    assert summary.loc[summary["cluster_id"] == 1, "expansion_log_fold_change"].iat[0] > 0
+    assert summary.loc[summary["cluster_id"] == 3, "expansion_log_fold_change"].iat[0] < 0
+
+
+def test_count_aware_betabinom_expansion_is_two_sided():
+    summary = pd.DataFrame(
+        {
+            "cluster_id": [1],
+            "sample_count_sum": [95.0],
+            "background_count_sum": [5.0],
+        }
+    )
+
+    summary = add_beta_binom_pvalues(summary, total_sample=100.0, total_background=100.0)
+
+    observed = 95
+    n = 100
+    a = 5.0
+    b = 95.0
+    expected = min(
+        1.0,
+        2.0 * min(
+            float(betabinom.cdf(observed, n=n, a=a, b=b)),
+            float(betabinom.sf(observed - 1, n=n, a=a, b=b)),
+        ),
+    )
+    actual = summary.loc[summary["cluster_id"] == 1, "enrichment_pvalue_betabinom_expansion"].iat[0]
+    assert np.isclose(actual, expected)

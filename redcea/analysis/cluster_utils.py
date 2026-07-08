@@ -21,7 +21,23 @@ def compute_cluster_summary(cluster_df: pd.DataFrame, sample_ids) -> pd.DataFram
         .reset_index()
     )
     summary["cluster_size"] = summary.get("sample", 0) + summary.get("background", 0)
-    return summary[summary.cluster_id != -1]
+    summary = summary[summary.cluster_id != -1].copy()
+
+    if "count" in cluster_df.columns:
+        weighted = (
+            cluster_df.groupby(["cluster_id", "source"])["count"]
+            .sum()
+            .unstack(fill_value=0.0)
+            .rename(columns={"sample": "sample_count_sum", "background": "background_count_sum"})
+            .reset_index()
+        )
+        summary = summary.merge(weighted, on="cluster_id", how="left")
+        if "sample_count_sum" not in summary.columns:
+            summary["sample_count_sum"] = 0.0
+        if "background_count_sum" not in summary.columns:
+            summary["background_count_sum"] = 0.0
+
+    return summary
 
 
 def merge_clusters_by_shared_cdr3(
