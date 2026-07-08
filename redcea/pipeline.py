@@ -144,11 +144,28 @@ def build_pipeline_artifacts(
     summary_df = add_log_fold_change(summary_df, total_sample=len(sample_ids), total_background=len(background_ids))
 
     pvalue_col, fdr_col = get_enrichment_column_names(config.enrichment_test)
-    enriched_clusters = summary_df.loc[
-        (summary_df[fdr_col] < 0.05) & (summary_df["log_fold_change"] > 0),
-        ["cluster_id", pvalue_col],
-    ]
-    logging.info("%d clusters identified as enriched by %s (fdr < 0.05, log_fold_change > 0).", len(enriched_clusters), config.enrichment_test)
+    unique_mask = (summary_df[fdr_col] < 0.05) & (summary_df["log_fold_change"] > 0)
+    if config.use_clonotype_counts:
+        expansion_mask = (
+            (summary_df["enrichment_fdr_betabinom_expansion"] < 0.05)
+            & (summary_df["expansion_log_fold_change"] > 0)
+        )
+        selection_mask = unique_mask | expansion_mask
+        logging.info(
+            "%d clusters pass unique-usage enrichment, %d pass expansion enrichment, %d pass either criterion.",
+            int(unique_mask.sum()),
+            int(expansion_mask.sum()),
+            int(selection_mask.sum()),
+        )
+    else:
+        selection_mask = unique_mask
+        logging.info(
+            "%d clusters identified as enriched by %s (fdr < 0.05, log_fold_change > 0).",
+            int(selection_mask.sum()),
+            config.enrichment_test,
+        )
+
+    enriched_clusters = summary_df.loc[selection_mask, ["cluster_id", pvalue_col]]
 
     enriched_clonotypes_df = cluster_df.merge(enriched_clusters, on="cluster_id")
 

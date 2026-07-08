@@ -149,6 +149,36 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
         "run_joint_clustering",
         lambda **kwargs: np.array([0, 0, 1, 0, 1], dtype="int32"),
     )
+    def fake_add_z_binom_pvalues(summary, total_sample, total_background):
+        summary = summary.copy()
+        summary["enrichment_pvalue_zbinom"] = [1e-8, 0.8]
+        summary["enrichment_fdr_zbinom"] = [1e-8, 0.8]
+        return summary
+
+    def fake_add_beta_binom_pvalues(summary, total_sample, total_background):
+        summary = summary.copy()
+        summary["enrichment_pvalue_betabinom_expansion"] = [0.9, 1e-8]
+        summary["enrichment_fdr_betabinom_expansion"] = [0.9, 1e-8]
+        return summary
+
+    def fake_add_count_frequency_columns(summary, total_sample, total_background):
+        summary = summary.copy()
+        summary["sample_count_sum"] = [35.0, 2.0]
+        summary["background_count_sum"] = [1.0, 1.0]
+        summary["sample_frequency"] = [0.9, 0.1]
+        summary["background_frequency"] = [0.5, 0.05]
+        summary["expansion_log_fold_change"] = [1.0, 1.0]
+        return summary
+
+    def fake_add_log_fold_change(summary, total_sample, total_background):
+        summary = summary.copy()
+        summary["log_fold_change"] = [1.0, -1.0]
+        return summary
+
+    monkeypatch.setattr(pipeline, "add_count_frequency_columns", fake_add_count_frequency_columns)
+    monkeypatch.setattr(pipeline, "add_z_binom_pvalues", fake_add_z_binom_pvalues)
+    monkeypatch.setattr(pipeline, "add_beta_binom_pvalues", fake_add_beta_binom_pvalues)
+    monkeypatch.setattr(pipeline, "add_log_fold_change", fake_add_log_fold_change)
 
     def fake_to_parquet(self, path, *args, **kwargs):
         return self.to_pickle(path)
@@ -183,3 +213,4 @@ def test_redcea_sample_vs_background_smoke(tmp_path, monkeypatch):
     assert {"enrichment_pvalue_betabinom_expansion", "enrichment_fdr_betabinom_expansion"} <= set(summary.columns)
     assert "count" in clusters.columns
     assert not enriched.empty
+    assert set(enriched["cluster_id"]) == {0, 1}
