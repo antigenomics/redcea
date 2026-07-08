@@ -1,6 +1,7 @@
 # tcrempnet/clustering/cluster_methods.py
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from typing import Optional
 
@@ -8,12 +9,43 @@ import numpy as np
 import pandas as pd
 
 from redcea.config import PipelineConfig
+from redcea.debug import summarize_distribution
 
 from .preprocess import standardize_data, apply_pca
-from .eps_estimation import estimate_dbscan_eps, cluster_dbscan, cluster_dbscan_with_filter
+from .eps_estimation import (
+    estimate_dbscan_eps,
+    cluster_dbscan,
+    cluster_dbscan_with_filter,
+    knn_neighbor_distances,
+    legacy_kth_returned_neighbor_distances,
+)
 from .cdr3_grouping import compute_cdr3_len, build_len_to_group_id, map_len_to_group_id
 from .eps_estimation import estimate_eps_by_group_from_sample, eps_per_point_from_group_id, estimate_eps_by_group_flexible
 from .vdbscan import vdbscan_from_knn
+
+
+@dataclass
+class JointDbscanDebugArtifacts:
+    labels: np.ndarray
+    eps: float
+    eps_column: int
+    eps_distances: np.ndarray
+    d1_column: int
+    d1_distances: np.ndarray
+    keep_mask: np.ndarray
+    self_index_fraction: float
+
+
+@dataclass
+class JointVdbscanDebugArtifacts:
+    labels: np.ndarray
+    eps_estimation_based_on: str
+    kth_neighbor: int
+    len_to_gid: dict[int, int]
+    sample_group_id: np.ndarray
+    background_group_id: np.ndarray
+    joint_group_id: np.ndarray
+    eps_by_gid: dict[int, float]
 
 
 # --- optional dependency: networkit ---
@@ -77,16 +109,105 @@ def run_dbscan_clustering_with_prefilter(
 
 
 def _nearest_neighbor_distances_from_knn(knn_distances: np.ndarray) -> np.ndarray:
-    if knn_distances.ndim != 2 or knn_distances.shape[1] < 1:
-        raise ValueError("knn_distances must be a 2D array with at least one neighbor column")
+    return knn_neighbor_distances(knn_distances, neighbor_rank=1)
 
-    if knn_distances.shape[1] == 1:
-        return knn_distances[:, 0]
 
-    first_col = knn_distances[:, 0]
-    if np.all(np.abs(first_col) < 1e-8):
-        return knn_distances[:, 1]
-    return first_col
+def _legacy_eps_distances_from_knn(knn_distances: np.ndarray, kth_neighbor: int) -> tuple[int, np.ndarray]:
+    eps_column = int(kth_neighbor) - 1
+    return eps_column, legacy_kth_returned_neighbor_distances(knn_distances, kth_neighbor)
+
+
+def run_joint_dbscan_clustering_with_diagnostics(
+    *,
+    config: PipelineConfig,
+    knn,
+) -> JointDbscanDebugArtifacts:
+    d0 = np.asarray(knn.distances[:, 0], dtype=np.float64)
+    d1 = np.asarray(_nearest_neighbor_distances_from_knn(knn.distances), dtype=np.float64)
+    eps_column, eps_distances_raw = _legacy_eps_distances_from_knn(knn.distances, config.eps_k_neighbors)
+    eps_distances = np.asarray(eps_distances_raw, dtype=np.float64)
+    self_index_fraction = float(np.mean(knn.indices[:, 0] == np.arange(knn.indices.shape[0])))
+
+    d0_stats = summarize_distribution(d0)
+    d1_stats = summarize_distribution(d1)
+    eps_input_stats = summarize_distribution(eps_distances)
+
+    logging.info(
+        "DBSCAN input: shape=%s cluster_algo=%s min_samples=%d k_neighbors=%d eps_k_neighbors=%d pc_components=%d",
+        tuple(knn.data_reduced.shape),
+        config.cluster_algo,
+        config.core_min_samples,
+        config.k_neighbors,
+        config.eps_k_neighbors,
+        config.cluster_pc_components,
+    )
+    logging.info(
+        "KNN self check: self_index_fraction=%.6f, d0_min=%.6f, d0_max=%.6f, d0_q99=%.6f",
+        self_index_fraction,
+        d0_stats["min"],
+        d0_stats["max"],
+        d0_stats["q99"],
+    )
+    logging.info(
+        "Nearest non-self neighbor distance stats: min=%.6f q01=%.6f q05=%.6f q25=%.6f q50=%.6f q75=%.6f q95=%.6f q99=%.6f max=%.6f",
+        d1_stats["min"],
+        d1_stats["q01"],
+        d1_stats["q05"],
+        d1_stats["q25"],
+        d1_stats["q50"],
+        d1_stats["q75"],
+        d1_stats["q95"],
+        d1_stats["q99"],
+        d1_stats["max"],
+    )
+
+    eps = float(
+        estimate_dbscan_eps(
+            data=None,
+            distances=eps_distances,
+            n_neighbors=config.eps_k_neighbors,
+        )
+    )
+    logging.info(
+        "DBSCAN eps input stats: column=%d min=%.6f q01=%.6f q05=%.6f q25=%.6f q50=%.6f q75=%.6f q95=%.6f q99=%.6f max=%.6f eps=%.6f",
+        eps_column,
+        eps_input_stats["min"],
+        eps_input_stats["q01"],
+        eps_input_stats["q05"],
+        eps_input_stats["q25"],
+        eps_input_stats["q50"],
+        eps_input_stats["q75"],
+        eps_input_stats["q95"],
+        eps_input_stats["q99"],
+        eps_input_stats["max"],
+        eps,
+    )
+
+    labels, filter_details = cluster_dbscan_with_filter(
+        knn.data_reduced,
+        eps=eps,
+        min_samples=config.core_min_samples,
+        nearest_neighbor_distances=d1,
+        return_details=True,
+    )
+    keep_mask = np.asarray(filter_details["keep_mask"], dtype=bool)
+    logging.info(
+        "DBSCAN prefilter summary: d1_column=%d removed=%d kept=%d",
+        1,
+        int(np.count_nonzero(~keep_mask)),
+        int(np.count_nonzero(keep_mask)),
+    )
+
+    return JointDbscanDebugArtifacts(
+        labels=np.asarray(labels),
+        eps=eps,
+        eps_column=eps_column,
+        eps_distances=eps_distances,
+        d1_column=1,
+        d1_distances=d1,
+        keep_mask=keep_mask,
+        self_index_fraction=self_index_fraction,
+    )
 
 
 # ==========================
@@ -402,6 +523,99 @@ def hierarchical_leiden_dbscan_clustering(
     return final_labels
 
 
+def hierarchical_vdbscan_leiden_clustering(
+    *,
+    config: PipelineConfig,
+    joint_representations: pd.DataFrame,
+    sample_representations: pd.DataFrame,
+    background_representations: pd.DataFrame,
+    knn,
+    vdbscan_labels: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    1) Joint vDBSCAN on the full sample+background graph
+    2) Leiden subclustering inside each non-noise vDBSCAN cluster
+
+    vDBSCAN defines coarse density-connected components; Leiden then refines
+    each component without discarding additional points as noise.
+    """
+    if len(joint_representations) != len(knn.indices):
+        raise ValueError(
+            "joint_representations and KNN artifacts must have the same number of rows: "
+            f"{len(joint_representations)} != {len(knn.indices)}"
+        )
+    if vdbscan_labels is None:
+        gid_all, eps_by_gid, _, _, _ = _estimate_vdbscan_group_assignments(
+            config=config,
+            joint_representations=joint_representations,
+            sample_representations=sample_representations,
+            background_representations=background_representations,
+            knn=knn,
+        )
+        eps_i_all = eps_per_point_from_group_id(gid_all, eps_by_gid)
+        vdbscan_labels = np.asarray(
+            vdbscan_from_knn(
+                knn_indices=knn.indices,
+                knn_distances_l2=knn.distances,
+                eps_i_l2=eps_i_all,
+                num_points_for_core=config.core_min_samples,
+                sym_rule=config.vdbscan_sym_rule,
+            )
+        )
+    else:
+        vdbscan_labels = np.asarray(vdbscan_labels)
+    if vdbscan_labels.shape != (len(joint_representations),):
+        raise ValueError(
+            "vdbscan_labels must be a 1D array aligned with joint_representations: "
+            f"expected {(len(joint_representations),)}, got {vdbscan_labels.shape}"
+        )
+    final_labels = -np.ones(len(vdbscan_labels), dtype=np.int64)
+    next_cluster_id = 0
+
+    coarse_clusters = [int(cluster_id) for cluster_id in np.unique(vdbscan_labels) if int(cluster_id) != -1]
+    logging.info(
+        "[vDBSCAN->Leiden] coarse clusters=%d, noise_points=%d",
+        len(coarse_clusters),
+        int(np.count_nonzero(vdbscan_labels == -1)),
+    )
+    for coarse_cluster_id in coarse_clusters:
+        idx = np.where(vdbscan_labels == coarse_cluster_id)[0]
+        size = int(len(idx))
+        if size <= 1:
+            final_labels[idx] = next_cluster_id
+            next_cluster_id += 1
+            continue
+
+        logging.info(
+            "[vDBSCAN->Leiden] refining coarse cluster %d (size=%d) with resolution=%.4f",
+            coarse_cluster_id,
+            size,
+            float(config.leiden_resolution),
+        )
+        sub_indices = knn.indices[idx]
+        sub_distances = knn.distances[idx]
+        mapping = {int(old): int(new) for new, old in enumerate(idx)}
+        remapped_indices = np.vectorize(lambda x: mapping.get(int(x), -1), otypes=[np.int64])(sub_indices).astype(np.int64)
+        sub_labels = run_leiden_clustering(
+            knn_indices=remapped_indices,
+            knn_distances=sub_distances,
+            resolution=config.leiden_resolution,
+            n_jobs=config.normalized_nproc,
+            min_cluster_size=None,
+        )
+        positive_subclusters = [int(subcluster) for subcluster in np.unique(sub_labels) if int(subcluster) != -1]
+        if not positive_subclusters:
+            final_labels[idx] = next_cluster_id
+            next_cluster_id += 1
+            continue
+        for subcluster in positive_subclusters:
+            mask = sub_labels == subcluster
+            final_labels[idx[mask]] = next_cluster_id
+            next_cluster_id += 1
+
+    return final_labels
+
+
 def _pick_cdr3_column(joint_representations: pd.DataFrame) -> str:
     if "cdr3aa_beta" in joint_representations.columns:
         return "cdr3aa_beta"
@@ -422,7 +636,7 @@ def _estimate_vdbscan_group_assignments(
     sample_representations: pd.DataFrame,
     background_representations: pd.DataFrame,
     knn,
-):
+) -> tuple[np.ndarray, dict[int, float], dict[int, int], np.ndarray, np.ndarray]:
     cdr3_col = _pick_cdr3_column(joint_representations)
     eps_estimation_based_on = config.eps_estimation_based_on
     kth_neighbor_for_eps = config.eps_k_neighbors
@@ -442,7 +656,7 @@ def _estimate_vdbscan_group_assignments(
             kth_neighbor=int(kth_neighbor_for_eps),
         )
         gid_all = np.concatenate([sample_gid, bg_gid]).astype(np.int32, copy=False)
-        return gid_all, eps_by_gid
+        return gid_all, eps_by_gid, len_to_gid, sample_gid, bg_gid
     if eps_estimation_based_on == "background":
         logging.info("Running vDBSCAN (eps-by-group from BACKGROUND only; L2 distances)")
         bg_len = compute_cdr3_len(background_representations[cdr3_col])
@@ -458,7 +672,7 @@ def _estimate_vdbscan_group_assignments(
             kth_neighbor=int(kth_neighbor_for_eps),
         )
         gid_all = np.concatenate([sample_gid, bg_gid]).astype(np.int32, copy=False)
-        return gid_all, eps_by_gid
+        return gid_all, eps_by_gid, len_to_gid, sample_gid, bg_gid
     if eps_estimation_based_on == "all":
         logging.info("Running vDBSCAN (eps-by-group from SAMPLE+BACKGROUND combined; L2 distances)")
         joint_len = compute_cdr3_len(joint_representations[cdr3_col])
@@ -470,11 +684,48 @@ def _estimate_vdbscan_group_assignments(
             dist_matrix=knn.distances,
             kth_neighbor=int(kth_neighbor_for_eps),
         )
-        return gid_all, eps_by_gid
+        sample_gid = gid_all[: len(sample_representations)].astype(np.int32, copy=False)
+        bg_gid = gid_all[len(sample_representations) :].astype(np.int32, copy=False)
+        return gid_all, eps_by_gid, len_to_gid, sample_gid, bg_gid
 
     raise ValueError(
         f"Unknown eps_estimation_based_on='{eps_estimation_based_on}'. "
         "Expected one of: sample, background, all"
+    )
+
+
+def run_joint_vdbscan_clustering_with_diagnostics(
+    *,
+    config: PipelineConfig,
+    joint_representations: pd.DataFrame,
+    sample_representations: pd.DataFrame,
+    background_representations: pd.DataFrame,
+    knn,
+) -> JointVdbscanDebugArtifacts:
+    gid_all, eps_by_gid, len_to_gid, sample_gid, bg_gid = _estimate_vdbscan_group_assignments(
+        config=config,
+        joint_representations=joint_representations,
+        sample_representations=sample_representations,
+        background_representations=background_representations,
+        knn=knn,
+    )
+    eps_i_all = eps_per_point_from_group_id(gid_all, eps_by_gid)
+    labels = vdbscan_from_knn(
+        knn_indices=knn.indices,
+        knn_distances_l2=knn.distances,
+        eps_i_l2=eps_i_all,
+        num_points_for_core=config.core_min_samples,
+        sym_rule=config.vdbscan_sym_rule,
+    )
+    return JointVdbscanDebugArtifacts(
+        labels=np.asarray(labels),
+        eps_estimation_based_on=config.eps_estimation_based_on,
+        kth_neighbor=int(config.eps_k_neighbors),
+        len_to_gid={int(length): int(gid) for length, gid in len_to_gid.items()},
+        sample_group_id=np.asarray(sample_gid, dtype=np.int32),
+        background_group_id=np.asarray(bg_gid, dtype=np.int32),
+        joint_group_id=np.asarray(gid_all, dtype=np.int32),
+        eps_by_gid={int(gid): float(eps) for gid, eps in eps_by_gid.items()},
     )
 
 
@@ -490,16 +741,17 @@ def run_joint_clustering(
     sample_mask[: len(sample_representations)] = True
 
     if config.cluster_algo == "dbscan":
+        _, eps_distances = _legacy_eps_distances_from_knn(knn.distances, config.eps_k_neighbors)
         eps = estimate_dbscan_eps(
             data=None,
-            distances=knn.distances[:, config.eps_k_neighbors - 1],
+            distances=eps_distances,
             n_neighbors=config.eps_k_neighbors,
         )
         return run_dbscan_clustering_with_prefilter(
             knn.data_reduced,
             eps=eps,
             nearest_neighbor_distances=_nearest_neighbor_distances_from_knn(knn.distances),
-            min_samples=config.cluster_min_samples,
+            min_samples=config.core_min_samples,
         )
     if config.cluster_algo == "leiden_dbscan":
         return hierarchical_leiden_dbscan_clustering(
@@ -508,7 +760,7 @@ def run_joint_clustering(
             knn_distances=knn.distances,
             resolution=config.leiden_resolution,
             k_neighbors=config.eps_k_neighbors,
-            num_points_for_core=config.cluster_min_samples,
+            num_points_for_core=config.core_min_samples,
             n_jobs=config.normalized_nproc,
         )
     if config.cluster_algo == "hierarchical_leiden":
@@ -530,11 +782,11 @@ def run_joint_clustering(
             knn_distances=knn.distances,
             resolution=config.leiden_resolution,
             n_jobs=config.normalized_nproc,
-            min_cluster_size=config.cluster_min_samples,
+            min_cluster_size=config.core_min_samples,
             min_cluster_size_mask=sample_mask,
         )
     if config.cluster_algo == "vdbscan":
-        gid_all, eps_by_gid = _estimate_vdbscan_group_assignments(
+        gid_all, eps_by_gid, _, _, _ = _estimate_vdbscan_group_assignments(
             config=config,
             joint_representations=joint_representations,
             sample_representations=sample_representations,
@@ -546,11 +798,19 @@ def run_joint_clustering(
             knn_indices=knn.indices,
             knn_distances_l2=knn.distances,
             eps_i_l2=eps_i_all,
-            num_points_for_core=config.cluster_min_samples,
+            num_points_for_core=config.core_min_samples,
             sym_rule=config.vdbscan_sym_rule,
+        )
+    if config.cluster_algo == "vdbscan_leiden":
+        return hierarchical_vdbscan_leiden_clustering(
+            config=config,
+            joint_representations=joint_representations,
+            sample_representations=sample_representations,
+            background_representations=background_representations,
+            knn=knn,
         )
 
     raise ValueError(
         f"Unknown cluster_algo='{config.cluster_algo}'. "
-        "Expected one of: dbscan, leiden_dbscan, hierarchical_leiden, leiden, vdbscan"
+        "Expected one of: dbscan, leiden_dbscan, hierarchical_leiden, leiden, vdbscan, vdbscan_leiden"
     )

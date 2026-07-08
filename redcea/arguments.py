@@ -55,7 +55,7 @@ def add_redcea_pipeline_args(parser: argparse.ArgumentParser) -> argparse.Argume
     )
     parser.add_argument(
         "--cluster-algo",
-        choices=["dbscan", "leiden_dbscan", "hierarchical_leiden", "leiden", "vdbscan"],
+        choices=["dbscan", "leiden_dbscan", "hierarchical_leiden", "leiden", "vdbscan", "vdbscan_leiden"],
         default="vdbscan",
         help="Clustering algorithm to use.",
     )
@@ -73,11 +73,14 @@ def add_redcea_pipeline_args(parser: argparse.ArgumentParser) -> argparse.Argume
         help="Number of PCA components for distances dimension reduction.",
     )
     parser.add_argument(
+        "-cms",
         "-ms",
+        "--core-min-samples",
         "--cluster-min-samples",
+        dest="core_min_samples",
         type=int,
         default=3,
-        help="min_samples parameter for clustering core points.",
+        help="Minimum number of points in the eps-neighborhood for a point to be considered core.",
     )
     parser.add_argument(
         "-kn",
@@ -118,6 +121,30 @@ def add_redcea_pipeline_args(parser: argparse.ArgumentParser) -> argparse.Argume
         default="asymmetric",
         choices=["asymmetric", "min", "max"],
         help="Symmetrization rule for vDBSCAN.",
+    )
+    parser.add_argument(
+        "--enrichment-test",
+        type=str,
+        default="zbinom",
+        choices=["zbinom", "binom", "fisher"],
+        help="Statistical test used for cluster enrichment.",
+    )
+    parser.add_argument(
+        "--debug-save-intermediate",
+        action="store_true",
+        help="Save optional debug artifacts with intermediate arrays, tables, and summaries.",
+    )
+    parser.add_argument(
+        "--debug-output-dir",
+        type=str,
+        default=None,
+        help="Optional custom directory for debug artifacts. Defaults to <output>/debug.",
+    )
+    parser.add_argument(
+        "--add-auxiliary-cluster-metrics",
+        dest="add_auxiliary_cluster_metrics",
+        action="store_true",
+        help="Append auxiliary support-aware enrichment and density-validity metrics to the cluster summary.",
     )
     return parser
 

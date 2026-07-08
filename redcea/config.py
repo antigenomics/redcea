@@ -27,7 +27,7 @@ class PipelineConfig:
     sample_random_clonotypes: bool
     random_seed: int
     cluster_pc_components: int
-    cluster_min_samples: int
+    core_min_samples: int
     k_neighbors: int
     eps_k_neighbors: int
     leiden_resolution: float
@@ -35,9 +35,16 @@ class PipelineConfig:
     cluster_algo: str
     eps_estimation_based_on: str
     vdbscan_sym_rule: str
+    enrichment_test: str
+    debug_save_intermediate: bool
+    debug_output_dir: str | None
+    add_auxiliary_cluster_metrics: bool
 
     @classmethod
     def from_args(cls, args: Any) -> "PipelineConfig":
+        core_min_samples = getattr(args, "core_min_samples", None)
+        if core_min_samples is None:
+            core_min_samples = getattr(args, "cluster_min_samples")
         return cls(
             sample=args.sample,
             background=args.background,
@@ -58,7 +65,7 @@ class PipelineConfig:
             sample_random_clonotypes=getattr(args, "sample_random_clonotypes", False),
             random_seed=getattr(args, "random_seed", 0),
             cluster_pc_components=args.cluster_pc_components,
-            cluster_min_samples=args.cluster_min_samples,
+            core_min_samples=core_min_samples,
             k_neighbors=args.k_neighbors,
             eps_k_neighbors=args.eps_k_neighbors,
             leiden_resolution=args.leiden_resolution,
@@ -66,7 +73,16 @@ class PipelineConfig:
             cluster_algo=args.cluster_algo,
             eps_estimation_based_on=args.eps_estimation_based_on,
             vdbscan_sym_rule=args.vdbscan_sym_rule,
+            enrichment_test=getattr(args, "enrichment_test", "zbinom"),
+            debug_save_intermediate=getattr(args, "debug_save_intermediate", False),
+            debug_output_dir=getattr(args, "debug_output_dir", None),
+            add_auxiliary_cluster_metrics=getattr(args, "add_auxiliary_cluster_metrics", False),
         )
+
+    @property
+    def cluster_min_samples(self) -> int:
+        # Backward-compatible alias for older call-sites and serialized configs.
+        return self.core_min_samples
 
     @property
     def normalized_nproc(self) -> int:

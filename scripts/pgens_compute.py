@@ -92,10 +92,15 @@ def main():
         pattern = "*_enriched_clonotypes_tcremp.tsv"
         files = sorted(base.glob(pattern))
     else:
+        base = None
+        pattern = None
         files = [Path(args.name)]
 
     if not files:
-        print(f"No files found matching {base}/{pattern}", file=sys.stderr)
+        if args.file:
+            print(f"No file found: {args.name}", file=sys.stderr)
+        else:
+            print(f"No files found matching {base}/{pattern}", file=sys.stderr)
         sys.exit(1)
 
     print(f"Found {len(files)} files")

@@ -1,0 +1,905 @@
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from itertools import combinations
+import warnings
+from pathlib import Path
+import re
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from scipy.stats import fisher_exact
+from sklearn.preprocessing import MinMaxScaler
+
+try:
+    import logomaker
+except Exception:  # pragma: no cover - optional notebook dependency
+    logomaker = None
+
+try:
+    from mir.common.clonotype import ClonotypeAA
+    from mir.common.clonotype_dataset import ClonotypeDataset
+except Exception:  # pragma: no cover - optional dependency in notebooks
+    ClonotypeAA = None
+    ClonotypeDataset = None
+
+
+DEFAULT_AS_SEQS = [
+    "CASSVGLFSTDTQYF",
+    "CASSVGLYSTDTQYF",
+    "CASSAGLFSTDTQYF",
+    "CASSAGLYSTDTQYF",
+    "CASSLGLFSTDTQYF",
+    "CASSLGLYSTDTQYF",
+    "CASSPGLFSTDTQYF",
+    "CASSPGLYSTDTQYF",
+]
+
+
+def _pgen_worker(seq: str) -> float:
+    try:
+        from mir.basic.pgen import OlgaModel
+
+        model = OlgaModel()
+        return float(model.compute_pgen_cdr3aa(seq))
+    except Exception:
+        return np.nan
+
+
+def compute_pgen_pool(
+    df: pd.DataFrame,
+    *,
+    seq_col: str = "cdr3aa_beta",
+    out_col: str = "pgen",
+    processes: int = 32,
+    chunksize: int = 500,
+) -> pd.Series:
+    from multiprocessing import Pool
+
+    sequences = df[seq_col].astype(str).tolist()
+    with Pool(processes=processes) as pool:
+        values = list(pool.imap(_pgen_worker, sequences, chunksize=chunksize))
+    return pd.Series(values, index=df.index, name=out_col)
+
+
+def compute_topsis_score(
+    df: pd.DataFrame,
+    metric_types: dict[str, str],
+    *,
+    weight_dict: dict[str, float] | None = None,
+) -> pd.DataFrame:
+    df = df.copy()
+    metrics = list(metric_types.keys())
+
+    normalized = df[metrics].copy()
+    scaler = MinMaxScaler()
+    normalized[metrics] = scaler.fit_transform(normalized[metrics])
+
+    for metric, kind in metric_types.items():
+        if kind == "cost":
+            normalized[metric] = 1 - normalized[metric]
+
+    if weight_dict is None:
+        weights = np.ones(len(metrics)) / len(metrics)
+    else:
+        weights = np.array([weight_dict[metric] for metric in metrics], dtype=float)
+        weights = weights / weights.sum()
+
+    weighted = normalized * weights
+    ideal = weighted.max()
+    anti_ideal = weighted.min()
+    d_pos = np.linalg.norm(weighted - ideal, axis=1)
+    d_neg = np.linalg.norm(weighted - anti_ideal, axis=1)
+    df["topsis_score"] = d_neg / (d_pos + d_neg)
+    return df.sort_values("topsis_score", ascending=False).reset_index(drop=True)
+
+
+def plot_volcano(
+    df: pd.DataFrame,
+    *,
+    pval_threshold: float = 0.05,
+    fold_threshold: float = 0.0,
+    sample_name: str = "",
+    ax=None,
+    layers: list[dict] | None = None,
+    point_size: int | None = None,
+    y_jitter: float = 0.08,
+    show_legend: bool = True,
+) -> plt.Axes:
+    df = df.copy()
+    eps = 1e-10
+    df["log10_pval"] = -np.log10(df["enrichment_pvalue_zbinom"] + eps)
+    df["significant"] = (
+        (df["enrichment_fdr_zbinom"] < pval_threshold)
+        & (df["log_fold_change"] > fold_threshold)
+    )
+    df["significance_label"] = np.where(
+        df["significant"],
+        f"FDR < {pval_threshold} and log2FC > {fold_threshold}",
+        "Other clusters",
+    )
+
+    if y_jitter > 0:
+        rng = np.random.default_rng(42)
+        df["plot_y"] = df["log10_pval"] + rng.uniform(-y_jitter, y_jitter, len(df))
+        df["plot_y"] = df["plot_y"].clip(lower=0)
+    else:
+        df["plot_y"] = df["log10_pval"]
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 6))
+
+    base_size = point_size if point_size else 36
+    sns.scatterplot(
+        data=df,
+        x="log_fold_change",
+        y="plot_y",
+        hue="significance_label",
+        palette={
+            "Other clusters": "#d2e8e3",
+            f"FDR < {pval_threshold} and log2FC > {fold_threshold}": "#ffcb9a",
+        },
+        edgecolor="black",
+        linewidth=0.3,
+        ax=ax,
+        s=base_size,
+    )
+
+    if layers:
+        for layer in layers:
+            column = layer["col"]
+            mask = df[column].fillna(False).astype(bool)
+            if not mask.any():
+                continue
+            sns.scatterplot(
+                data=df.loc[mask],
+                x="log_fold_change",
+                y="plot_y",
+                color=layer.get("color", "#c1121f"),
+                marker=layer.get("marker", "o"),
+                label=layer.get("label", column),
+                edgecolor="black",
+                linewidth=0.8,
+                ax=ax,
+                s=layer.get("size", max(base_size * 2.6, 90)),
+                zorder=5,
+            )
+
+    ax.axvline(fold_threshold, linestyle="--", color="black")
+    fdr_selected = df.loc[df["enrichment_fdr_zbinom"] < pval_threshold, "enrichment_pvalue_zbinom"]
+    if len(fdr_selected):
+        fdr_line_y = -np.log10(float(fdr_selected.max()) + eps)
+        ax.axhline(fdr_line_y, linestyle="--", color="black")
+    ax.set_title(sample_name)
+    ax.set_xlabel("log2(Fold Enrichment)")
+    ax.set_ylabel("-log10(p-value)")
+    ax.set_xscale("symlog", linthresh=1.0, linscale=1.0, base=2)
+
+    legend = ax.get_legend()
+    if legend is not None:
+        if show_legend:
+            legend.set_title("")
+        else:
+            legend.remove()
+
+    return ax
+
+
+def plot_logo(clonotypes: pd.Series) -> None:
+    if logomaker is None:
+        raise ImportError("logomaker is required for sequence logo plots")
+    matrix = logomaker.alignment_to_matrix(clonotypes.dropna().astype(str))
+    logomaker.Logo(matrix, color_scheme="skylign_protein", ax=plt.gca())
+
+
+@dataclass
+class RunTables:
+    sample_name: str
+    summary: pd.DataFrame
+    clusters: pd.DataFrame
+    enriched: pd.DataFrame
+
+
+def detect_run_prefix(run_dir: str | Path) -> str:
+    run_dir = Path(run_dir)
+    summary_matches = sorted(run_dir.glob("*_summary_tcrempnet.tsv"))
+    if summary_matches:
+        return summary_matches[0].name[: -len("_summary_tcrempnet.tsv")]
+
+    cluster_matches = sorted(run_dir.glob("*_tcremp_clusters.tsv"))
+    if cluster_matches:
+        return cluster_matches[0].name[: -len("_tcremp_clusters.tsv")]
+
+    enriched_matches = sorted(run_dir.glob("*_enriched_clonotypes_tcremp*.tsv"))
+    if enriched_matches:
+        name = enriched_matches[0].name
+        for suffix in ("_enriched_clonotypes_tcremp_pgen.tsv", "_enriched_clonotypes_tcremp.tsv"):
+            if name.endswith(suffix):
+                return name[: -len(suffix)]
+
+    raise FileNotFoundError(f"Could not detect run prefix from files in {run_dir}")
+
+
+def normalize_gene(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    return re.sub(r"\*.*$", "", str(value))
+
+
+def _pick_first_existing_column(frame: pd.DataFrame, candidates: tuple[str, ...], label: str) -> str:
+    for column in candidates:
+        if column in frame.columns:
+            return column
+    raise ValueError(f"Could not find {label} column. Tried: {', '.join(candidates)}")
+
+
+def _clean_lookup_value(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return ""
+    return text
+
+
+def build_sequence_patient_lookup_from_airr(
+    metadata: pd.DataFrame,
+    airr_dir: str | Path,
+    *,
+    sample_name_col: str = "sample_name",
+    disease_status_col: str = "disease_status",
+    selected_disease_status: str = "hd",
+    seq_col_candidates: tuple[str, ...] = ("cdr3aa_beta", "junction_aa", "cdr3aa", "cdr3_aa"),
+) -> tuple[dict[str, set[str]], list[str]]:
+    airr_dir = Path(airr_dir)
+    if sample_name_col not in metadata.columns:
+        raise ValueError(f"Metadata is missing required column: {sample_name_col}")
+    if disease_status_col not in metadata.columns:
+        raise ValueError(f"Metadata is missing required column: {disease_status_col}")
+
+    usage_lookup: dict[str, set[str]] = defaultdict(set)
+    selected_samples: list[str] = []
+
+    filtered = metadata.loc[
+        metadata[disease_status_col].astype(str).str.lower().eq(selected_disease_status.lower())
+    ].copy()
+
+    for sample_name in filtered[sample_name_col].dropna().astype(str).unique():
+        sample_file = airr_dir / f"{sample_name}.tsv"
+        if not sample_file.exists():
+            continue
+
+        sample_df = pd.read_csv(sample_file, sep="\t")
+        seq_col = _pick_first_existing_column(sample_df, seq_col_candidates, "sequence")
+        sequences = (
+            sample_df[seq_col]
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+        sequences = sequences[sequences.ne("") & ~sequences.str.lower().eq("nan")]
+        if sequences.empty:
+            continue
+
+        selected_samples.append(sample_name)
+        for sequence in sequences.unique():
+            usage_lookup[sequence].add(sample_name)
+
+    return dict(usage_lookup), selected_samples
+
+
+def build_clonotype_patient_lookup_from_airr(
+    metadata: pd.DataFrame,
+    airr_dir: str | Path,
+    *,
+    sample_name_col: str = "sample_name",
+    disease_status_col: str = "disease_status",
+    selected_disease_status: str = "hd",
+    seq_col_candidates: tuple[str, ...] = ("cdr3aa_beta", "junction_aa", "cdr3aa", "cdr3_aa"),
+    v_col_candidates: tuple[str, ...] = ("v_beta", "v_call", "v"),
+    j_col_candidates: tuple[str, ...] = ("j_beta", "j_call", "j"),
+) -> tuple[dict[tuple[str, str, str], set[str]], list[str]]:
+    airr_dir = Path(airr_dir)
+    if sample_name_col not in metadata.columns:
+        raise ValueError(f"Metadata is missing required column: {sample_name_col}")
+    if disease_status_col not in metadata.columns:
+        raise ValueError(f"Metadata is missing required column: {disease_status_col}")
+
+    usage_lookup: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    selected_samples: list[str] = []
+
+    filtered = metadata.loc[
+        metadata[disease_status_col].astype(str).str.lower().eq(selected_disease_status.lower())
+    ].copy()
+
+    for sample_name in filtered[sample_name_col].dropna().astype(str).unique():
+        sample_file = airr_dir / f"{sample_name}.tsv"
+        if not sample_file.exists():
+            continue
+
+        sample_df = pd.read_csv(sample_file, sep="\t")
+        seq_col = _pick_first_existing_column(sample_df, seq_col_candidates, "sequence")
+        v_col = _pick_first_existing_column(sample_df, v_col_candidates, "V gene")
+        j_col = _pick_first_existing_column(sample_df, j_col_candidates, "J gene")
+
+        key_frame = sample_df[[seq_col, v_col, j_col]].copy()
+        key_frame.columns = ["sequence", "v_gene", "j_gene"]
+        key_frame["sequence"] = key_frame["sequence"].map(_clean_lookup_value)
+        key_frame["v_gene"] = key_frame["v_gene"].map(_clean_lookup_value)
+        key_frame["j_gene"] = key_frame["j_gene"].map(_clean_lookup_value)
+        key_frame = key_frame[
+            key_frame["sequence"].ne("")
+            & key_frame["v_gene"].ne("")
+            & key_frame["j_gene"].ne("")
+        ].drop_duplicates()
+        if key_frame.empty:
+            continue
+
+        selected_samples.append(sample_name)
+        for sequence, v_gene, j_gene in key_frame.itertuples(index=False, name=None):
+            usage_lookup[(sequence, v_gene, j_gene)].add(sample_name)
+
+    return dict(usage_lookup), selected_samples
+
+
+def infer_source_from_sample_name(sample_name: str, case_regex: str, control_regex: str) -> str:
+    if re.search(case_regex, sample_name):
+        return "case"
+    if re.search(control_regex, sample_name):
+        return "control"
+    return "other"
+
+
+def load_run_tables(run_dir: str | Path) -> RunTables:
+    run_dir = Path(run_dir)
+    prefix = detect_run_prefix(run_dir)
+
+    summary = pd.read_csv(run_dir / f"{prefix}_summary_tcrempnet.tsv", sep="\t")
+    clusters = pd.read_csv(run_dir / f"{prefix}_tcremp_clusters.tsv", sep="\t")
+
+    enriched_candidates = [
+        run_dir / f"{prefix}_enriched_clonotypes_tcremp_pgen.tsv",
+        run_dir / f"{prefix}_enriched_clonotypes_tcremp.tsv",
+    ]
+    enriched_path = next((path for path in enriched_candidates if path.exists()), None)
+    if enriched_path is None:
+        raise FileNotFoundError(f"No enriched clonotype file found in {run_dir}")
+
+    enriched = pd.read_csv(enriched_path, sep="\t")
+    return RunTables(sample_name=prefix, summary=summary, clusters=clusters, enriched=enriched)
+
+
+def load_many_runs(runs_root: str | Path, sample_names: list[str] | None = None) -> dict[str, RunTables]:
+    runs_root = Path(runs_root)
+    if sample_names is None:
+        sample_names = sorted(path.name for path in runs_root.iterdir() if path.is_dir())
+
+    loaded_runs: dict[str, RunTables] = {}
+    failed_samples: list[tuple[str, str]] = []
+
+    for sample_name in sample_names:
+        run_dir = runs_root / sample_name
+        try:
+            loaded_runs[sample_name] = load_run_tables(run_dir)
+        except Exception as exc:
+            message = f"Skipping {sample_name}: {exc}"
+            warnings.warn(message)
+            print(message)
+            failed_samples.append((sample_name, str(exc)))
+
+    if failed_samples:
+        print(f"Loaded {len(loaded_runs)} runs, skipped {len(failed_samples)} runs.")
+
+    return loaded_runs
+
+
+def build_reference_matcher(reference_sequences: list[str]):
+    if ClonotypeAA is not None and ClonotypeDataset is not None:
+        ref_clonotypes = [ClonotypeAA(cdr3aa=seq) for seq in reference_sequences]
+        return ClonotypeDataset(ref_clonotypes)
+    return set(reference_sequences)
+
+
+def has_reference_match(sequence: str, matcher, threshold: int = 1) -> bool:
+    if sequence is None or pd.isna(sequence):
+        return False
+
+    sequence = str(sequence)
+    if hasattr(matcher, "get_matching_clonotypes"):
+        return len(matcher.get_matching_clonotypes(sequence, threshold=threshold)) > 0
+
+    reference_sequences: set[str] = matcher
+    if threshold <= 0:
+        return sequence in reference_sequences
+
+    for ref in reference_sequences:
+        if len(ref) != len(sequence):
+            continue
+        mismatches = sum(a != b for a, b in zip(ref, sequence))
+        if mismatches <= threshold:
+            return True
+    return False
+
+
+def annotate_as_pattern(
+    df: pd.DataFrame,
+    matcher,
+    *,
+    seq_col: str = "cdr3aa_beta",
+    threshold: int = 1,
+    out_col: str = "as_pattern",
+) -> pd.DataFrame:
+    df = df.copy()
+    df[out_col] = df[seq_col].apply(lambda value: has_reference_match(value, matcher, threshold=threshold))
+    return df
+
+
+def annotate_run_volcano_summary(run: RunTables, matcher, *, as_match_threshold: int = 1) -> pd.DataFrame:
+    clusters = annotate_as_pattern(run.clusters, matcher, threshold=as_match_threshold)
+    as_by_cluster = (
+        clusters.groupby("cluster_id")["as_pattern"]
+        .any()
+        .rename("as_pattern")
+        .reset_index()
+    )
+    summary = run.summary.merge(as_by_cluster, on="cluster_id", how="left")
+    summary["as_pattern"] = summary["as_pattern"].fillna(False)
+    summary["sample_name"] = run.sample_name
+    return summary
+
+
+def plot_sample_volcano_grid(
+    runs: dict[str, RunTables],
+    matcher,
+    *,
+    samples_per_row: int = 9,
+    fold_threshold: float = 1.0,
+    pval_threshold: float = 0.05,
+    as_match_threshold: int = 1,
+    figsize_per_panel: tuple[float, float] = (3.4, 3.4),
+) -> tuple[plt.Figure, list[pd.DataFrame]]:
+    sample_names = list(runs)
+    n_samples = len(sample_names)
+    n_cols = samples_per_row
+    n_rows = int(np.ceil(n_samples / n_cols))
+
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(figsize_per_panel[0] * n_cols, figsize_per_panel[1] * n_rows),
+        squeeze=False,
+    )
+
+    summaries = []
+    legend_handles = None
+    legend_labels = None
+    for idx, sample_name in enumerate(sample_names):
+        row, col = divmod(idx, n_cols)
+        ax = axes[row][col]
+        summary = annotate_run_volcano_summary(
+            runs[sample_name],
+            matcher,
+            as_match_threshold=as_match_threshold,
+        )
+        plot_volcano(
+            summary,
+            pval_threshold=pval_threshold,
+            fold_threshold=fold_threshold,
+            sample_name=sample_name,
+            ax=ax,
+            layers=[
+                {
+                    "col": "as_pattern",
+                    "label": "AS exact-match clone" if as_match_threshold == 0 else f"AS clone <= {as_match_threshold} aa mismatch",
+                    "color": "#c1121f",
+                    "marker": "o",
+                    "size": 120,
+                }
+            ],
+            point_size=45,
+            show_legend=False,
+        )
+
+        if summary["as_pattern"].fillna(False).any():
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#c1121f")
+                spine.set_linewidth(2.2)
+
+        if legend_handles is None:
+            handles, labels = ax.get_legend_handles_labels()
+            if handles and labels:
+                legend_handles, legend_labels = handles, labels
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+
+        summaries.append(summary)
+
+    for idx in range(n_samples, n_rows * n_cols):
+        row, col = divmod(idx, n_cols)
+        axes[row][col].axis("off")
+
+    if legend_handles and legend_labels:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            ncol=min(3, len(legend_labels)),
+            frameon=True,
+            bbox_to_anchor=(0.5, 1.02),
+        )
+
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    return fig, summaries
+
+
+def _wildcard_neighbors(sequence: str, substitutions: int) -> set[str]:
+    if substitutions <= 0:
+        return {sequence}
+
+    keys = {sequence}
+    for idxs in combinations(range(len(sequence)), substitutions):
+        chars = list(sequence)
+        for idx in idxs:
+            chars[idx] = "*"
+        keys.add("".join(chars))
+    return keys
+
+
+def merge_clusters_by_cdr3_threshold(
+    df: pd.DataFrame,
+    *,
+    substitutions: int = 0,
+    cluster_col: str = "cluster_uid",
+    seq_col: str = "cdr3aa_beta",
+    merged_col: str = "merged_cluster_id",
+    source_col: str = "source",
+    merge_source_value: str = "sample",
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    adjacency: dict[str, set[str]] = defaultdict(set)
+    seq_key_to_clusters: dict[tuple[int, str], set[str]] = defaultdict(set)
+
+    merge_df = df.copy()
+    if source_col in merge_df.columns:
+        merge_df = merge_df[merge_df[source_col] == merge_source_value]
+
+    for _, row in merge_df[[cluster_col, seq_col]].drop_duplicates().iterrows():
+        cluster_id = row[cluster_col]
+        sequence = str(row[seq_col])
+        wildcard_keys = {sequence} if substitutions <= 0 else _wildcard_neighbors(sequence, substitutions)
+        for wildcard_key in wildcard_keys:
+            seq_key_to_clusters[(len(sequence), wildcard_key)].add(cluster_id)
+
+    all_clusters = set(df[cluster_col].astype(str))
+    for clusters in seq_key_to_clusters.values():
+        clusters = sorted(str(cluster) for cluster in clusters)
+        if len(clusters) < 2:
+            continue
+        first = clusters[0]
+        for other in clusters[1:]:
+            adjacency[first].add(other)
+            adjacency[other].add(first)
+
+    visited: set[str] = set()
+    mapping: dict[str, int] = {}
+    next_id = 0
+
+    for cluster_id in sorted(all_clusters):
+        if cluster_id in visited:
+            continue
+        stack = [cluster_id]
+        component = []
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            component.append(current)
+            stack.extend(adjacency[current] - visited)
+
+        for member in component:
+            mapping[member] = next_id
+        next_id += 1
+
+    merged_df = df.copy()
+    merged_df[cluster_col] = merged_df[cluster_col].astype(str)
+    merged_df[merged_col] = merged_df[cluster_col].map(mapping)
+    return merged_df, mapping
+
+
+def prepare_merged_clonotypes(
+    runs: dict[str, RunTables],
+    matcher,
+    *,
+    compute_pgen_if_missing: bool = False,
+    pgen_processes: int = 16,
+    as_match_threshold: int = 1,
+    case_regex: str = r"^as_",
+    control_regex: str = r"^(?:h_|hd_)",
+) -> pd.DataFrame:
+    frames = []
+    for sample_name, run in runs.items():
+        sample_enriched = run.enriched.copy()
+        if "source" not in sample_enriched.columns:
+            sample_enriched["source"] = np.where(
+                sample_enriched["clone_id"].astype(str).str.startswith("b_"),
+                "background",
+                "sample",
+            )
+        sample_enriched["sample_name"] = sample_name
+        sample_enriched["sample_group"] = infer_source_from_sample_name(
+            sample_name,
+            case_regex=case_regex,
+            control_regex=control_regex,
+        )
+        sample_enriched["cluster_uid"] = (
+            sample_enriched["sample_name"].astype(str)
+            + "::"
+            + sample_enriched["cluster_id"].astype(str)
+        )
+        sample_enriched["as_pattern"] = sample_enriched["cdr3aa_beta"].apply(
+            lambda value: has_reference_match(value, matcher, threshold=as_match_threshold)
+        )
+        sample_enriched["v_gene"] = sample_enriched["v_beta"].map(normalize_gene)
+        sample_enriched["j_gene"] = sample_enriched["j_beta"].map(normalize_gene)
+        frames.append(sample_enriched)
+
+    df = pd.concat(frames, ignore_index=True)
+    if "pgen" not in df.columns:
+        df["pgen"] = np.nan
+
+    if compute_pgen_if_missing and df["pgen"].isna().all():
+        df["pgen"] = compute_pgen_pool(df, processes=pgen_processes)
+
+    return df
+
+
+def _safe_ratio(numerator: float, denominator: float, pseudo: float = 0.5) -> float:
+    return (numerator + pseudo) / (denominator + pseudo)
+
+
+def summarize_merged_clusters(
+    df: pd.DataFrame,
+    *,
+    merged_col: str = "merged_cluster_id",
+    source_col: str = "source",
+    case_group: str = "case",
+    control_group: str = "control",
+    external_control_usage: dict[str, set[str]] | None = None,
+    external_control_total: int | None = None,
+    control_seq_col: str = "cdr3aa_beta",
+    external_control_match_cols: tuple[str, ...] | None = None,
+) -> pd.DataFrame:
+    cluster_sizes = df.groupby(merged_col).size().rename("cluster_size")
+    sample_counts = (
+        df.groupby(merged_col)
+        .agg(
+            n_samples=("sample_name", "nunique"),
+            as_pattern=("as_pattern", "any"),
+            pgen=("pgen", "mean"),
+        )
+    )
+    source_counts = (
+        df.pivot_table(
+            index=merged_col,
+            columns=source_col,
+            values="clone_id",
+            aggfunc="count",
+            fill_value=0,
+        )
+        .rename_axis(columns=None)
+    )
+
+    summary = (
+        cluster_sizes.to_frame()
+        .join(sample_counts, how="left")
+        .join(source_counts, how="left")
+        .reset_index()
+    )
+
+    for column in ("sample", "background"):
+        if column not in summary.columns:
+            summary[column] = 0
+
+    summary["sample_fraction"] = summary["sample"] / summary["cluster_size"].clip(lower=1)
+    summary["background_fraction"] = summary["background"] / summary["cluster_size"].clip(lower=1)
+    summary["n_patients"] = summary["n_samples"]
+
+    group_presence = (
+        df.groupby([merged_col, "sample_group", "sample_name"])
+        .size()
+        .reset_index(name="n")
+    )
+
+    case_usage = (
+        group_presence[group_presence["sample_group"] == case_group]
+        .groupby(merged_col)["sample_name"]
+        .nunique()
+        .rename("as_usage")
+    )
+
+    if external_control_usage is None:
+        control_usage = (
+            group_presence[group_presence["sample_group"] == control_group]
+            .groupby(merged_col)["sample_name"]
+            .nunique()
+            .rename("h_usage")
+        )
+    else:
+        control_usage_counts: dict[object, int] = {}
+        for cluster_id, cluster_df in df.groupby(merged_col):
+            patients: set[str] = set()
+            if external_control_match_cols:
+                key_rows = cluster_df.loc[:, list(external_control_match_cols)].drop_duplicates()
+                for row in key_rows.itertuples(index=False, name=None):
+                    key = tuple(_clean_lookup_value(value) for value in row)
+                    if any(not value for value in key):
+                        continue
+                    patients |= external_control_usage.get(key, set())
+            else:
+                for sequence in cluster_df[control_seq_col].dropna().astype(str).unique():
+                    cleaned_sequence = _clean_lookup_value(sequence)
+                    if not cleaned_sequence:
+                        continue
+                    patients |= external_control_usage.get(cleaned_sequence, set())
+            control_usage_counts[cluster_id] = len(patients)
+        control_usage = pd.Series(control_usage_counts, name="h_usage")
+
+    summary = summary.join(case_usage, on=merged_col).join(control_usage, on=merged_col)
+    summary["as_usage"] = summary["as_usage"].fillna(0).astype(int)
+    summary["h_usage"] = summary["h_usage"].fillna(0).astype(int)
+
+    total_case = max(df.loc[df["sample_group"] == case_group, "sample_name"].nunique(), 1)
+    if external_control_total is None:
+        total_control = max(df.loc[df["sample_group"] == control_group, "sample_name"].nunique(), 1)
+    else:
+        total_control = max(int(external_control_total), 1)
+
+    fisher_p_values = []
+    patient_fc_values = []
+    for _, row in summary.iterrows():
+        as_used = int(row["as_usage"])
+        h_used = int(row["h_usage"])
+        contingency = [
+            [as_used, max(total_case - as_used, 0)],
+            [h_used, max(total_control - h_used, 0)],
+        ]
+        _, p_value = fisher_exact(contingency)
+        fisher_p_values.append(p_value)
+
+        case_prev = as_used / total_case
+        control_prev = h_used / total_control
+        patient_fc_values.append(_safe_ratio(case_prev, control_prev))
+
+    summary["fisher_p"] = fisher_p_values
+    summary["patient_fc"] = patient_fc_values
+    summary["log_patient_fc"] = np.log10(summary["patient_fc"])
+    summary["log_pgen"] = np.log10(summary["pgen"].clip(lower=1e-16))
+    summary["log_cluster_size"] = np.log10(summary["cluster_size"].clip(lower=1))
+
+    return summary.sort_values(["n_samples", "cluster_size"], ascending=False).reset_index(drop=True)
+
+
+def rank_clusters_with_topsis(
+    summary: pd.DataFrame,
+    *,
+    min_samples: int = 2,
+    metric_types: dict[str, str] | None = None,
+    weights: dict[str, float] | None = None,
+    require_positive_log_patient_fc: bool = False,
+) -> pd.DataFrame:
+    if metric_types is None:
+        metric_types = {
+            "sample_fraction": "benefit",
+            "as_usage": "benefit",
+            "h_usage": "cost",
+            "log_pgen": "cost",
+            "patient_fc": "benefit",
+            "log_cluster_size": "benefit",
+        }
+
+    ranked_input = summary.loc[summary["n_samples"] >= min_samples].copy()
+    if require_positive_log_patient_fc:
+        ranked_input = ranked_input.loc[ranked_input["log_patient_fc"] > 0].copy()
+    if "n_patients" not in ranked_input.columns and "n_samples" in ranked_input.columns:
+        ranked_input["n_patients"] = ranked_input["n_samples"]
+    ranked = compute_topsis_score(ranked_input, metric_types, weight_dict=weights)
+    ranked.insert(0, "rank", np.arange(1, len(ranked) + 1))
+    return ranked
+
+
+def plot_ranked_metrics(
+    ranked_df: pd.DataFrame,
+    *,
+    metrics: list[str] | None = None,
+    hue_col: str = "as_pattern",
+    figsize: tuple[float, float] = (14.0, 8.0),
+) -> plt.Figure:
+    if metrics is None:
+        metrics = [
+            "topsis_score",
+            "patient_fc",
+            "sample_fraction",
+            "as_usage",
+            "h_usage",
+            "log_pgen",
+            "cluster_size",
+        ]
+
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    axes = axes.ravel()
+
+    sns.scatterplot(data=ranked_df, x="rank", y="topsis_score", hue=hue_col, ax=axes[0], palette="Set1")
+    axes[0].set_title("TOPSIS score by rank")
+
+    sns.scatterplot(data=ranked_df, x="rank", y="patient_fc", hue=hue_col, ax=axes[1], palette="Set1", legend=False)
+    axes[1].set_title("Patient fold-change by rank")
+
+    metric_frame = ranked_df[["rank"] + metrics].melt(id_vars="rank", var_name="metric", value_name="value")
+    sns.lineplot(data=metric_frame, x="rank", y="value", hue="metric", ax=axes[2])
+    axes[2].set_title("Metric trajectories across rank")
+
+    top_slice = ranked_df.head(min(25, len(ranked_df)))
+    sns.scatterplot(
+        data=top_slice,
+        x="sample_fraction",
+        y="patient_fc",
+        size="cluster_size",
+        hue=hue_col,
+        palette="Set1",
+        ax=axes[3],
+    )
+    axes[3].set_title("Top clusters: sample fraction vs patient FC")
+
+    fig.tight_layout()
+    return fig
+
+
+def summarize_vj_genes(cluster_df: pd.DataFrame, *, top_k: int = 3) -> str:
+    v_counts = Counter(cluster_df["v_gene"].dropna())
+    j_counts = Counter(cluster_df["j_gene"].dropna())
+    top_v = ", ".join(f"{gene}({count})" for gene, count in v_counts.most_common(top_k)) or "NA"
+    top_j = ", ".join(f"{gene}({count})" for gene, count in j_counts.most_common(top_k)) or "NA"
+    return f"V: {top_v}\nJ: {top_j}"
+
+
+def plot_top_cluster_logos(
+    df: pd.DataFrame,
+    ranked_df: pd.DataFrame,
+    *,
+    top_n: int = 12,
+    merged_col: str = "merged_cluster_id",
+    seq_col: str = "cdr3aa_beta",
+    figsize_per_panel: tuple[float, float] = (4.5, 3.5),
+) -> plt.Figure:
+    top_clusters = ranked_df.head(top_n)
+    n_cols = 3
+    n_rows = int(np.ceil(len(top_clusters) / n_cols))
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(figsize_per_panel[0] * n_cols, figsize_per_panel[1] * n_rows),
+        squeeze=False,
+    )
+
+    for idx, row in top_clusters.reset_index(drop=True).iterrows():
+        ax = axes[idx // n_cols][idx % n_cols]
+        cluster_id = row[merged_col]
+        cluster_df = df[df[merged_col] == cluster_id]
+        plt.sca(ax)
+        plot_logo(cluster_df[seq_col].dropna())
+        ax.set_title(
+            f"rank {int(row['rank'])} | cluster {cluster_id}\n"
+            f"TOPSIS={row['topsis_score']:.3f} | n={len(cluster_df)}\n"
+            f"{summarize_vj_genes(cluster_df)}",
+            fontsize=10,
+        )
+
+    for idx in range(len(top_clusters), n_rows * n_cols):
+        axes[idx // n_cols][idx % n_cols].axis("off")
+
+    fig.tight_layout()
+    return fig
